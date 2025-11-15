@@ -2,8 +2,6 @@ The **Smart Intrusion Detection & Response Agent** is an enterprise-grade AI sur
 
 The platform delivers **real-time monitoring**, **behavioral threat scoring**, **suspect identification**, **crowd analytics**, and a powerful **AI-driven query interface** that enables security operators to interact with surveillance data using natural language.
 
----
-
 ## **✨ Key Capabilities**
 
 ### **1. Real-Time Situational Awareness**
