@@ -1,8 +1,3 @@
-**Smart Intrusion Detection & Response Agent**
-**• Real-Time Threat Detection • Automated Response**
-
-## **📌 Summary**
-
 The **Smart Intrusion Detection & Response Agent** is an enterprise-grade AI surveillance system designed to enhance physical security across public and private infrastructures such as malls, airports, university campuses, office buildings, and industrial facilities.
 
 The platform delivers **real-time monitoring**, **behavioral threat scoring**, **suspect identification**, **crowd analytics**, and a powerful **AI-driven query interface** that enables security operators to interact with surveillance data using natural language.
