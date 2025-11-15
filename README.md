@@ -84,7 +84,6 @@ Powered by LLMs and a surveillance-aware query engine.
 * **Node.js + Express**
 * **Socket.IO**
 * **PostgreSQL / SQLite**
-* **Prisma ORM** (optional)
 * **JWT Authentication**
 
 ### **Computer Vision Models**
@@ -95,32 +94,9 @@ Powered by LLMs and a surveillance-aware query engine.
 * **MediaPipe FaceMesh** (face covering & head turns)
 * **FaceNet / InsightFace** (suspect identification)
 
-### **AI Chat System**
+### **AI Chat System using OpenAI or Llama**
 
-* **OpenAI GPT-4o mini / GPT-4o**
-* **Llama 3 (local alternative)**
-* **Surveillance Query Engine** (custom)
-
-### **Optional Python Microservice**
-
-* **FastAPI**
-* **PyTorch**
-* **OpenCV**
-* **InsightFace**
-
-## **🧪 Demonstration Workflow**
-
-1. **Live feed displayed** with bounding boxes
-2. **Restricted zone entry** triggers alert
-3. **Loitering & suspicious behavior** increases Threat Score
-4. **Weapon-like object** is detected
-5. **Registered suspect** identified in real time
-6. **Crowd builds** → heatmap turns yellow/red
-7. Operator asks AI interface:
-
-   * “Where is the suspect now?”
-   * “Show last suspicious event.”
-8. System responds with real-time, structured intelligence
+### **Several Python Microservices**
 
 ---
 
@@ -143,6 +119,6 @@ Powered by LLMs and a surveillance-aware query engine.
 
 ---
 
-## **Final notes**
+## **🏁 Final notes**
 
 This project serves as a complete proof-of-concept for modern AI-driven surveillance, combining real-time detection, behavioral analytics, and natural-language insights into one cohesive security system.
