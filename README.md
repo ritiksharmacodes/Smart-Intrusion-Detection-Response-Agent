@@ -54,7 +54,7 @@ Powered by LLMs and a surveillance-aware query engine.
 
 * Audible alarms & sirens
 * Visual warnings (UI overlays + flashing indicators)
-* SMS/WhatsApp notifications (optional)
+* SMS/WhatsApp notifications
 * Timeline-based event logs
 
 ---
@@ -67,10 +67,10 @@ Powered by LLMs and a surveillance-aware query engine.
 * **Vite**
 * **TailwindCSS**
 * **Canvas API (Visualization Layer)**
-* **ONNX Runtime Web** (YOLO inference)
-* **TensorFlow.js** (pose/head models)
+* **ONNX Runtime Web (YOLO inference)**
+* **TensorFlow.js (pose/head models)**
 * **Socket.IO Client**
-* **Recharts** (analytics dashboards)
+* **Recharts (analytics dashboards)**
 
 ### **Backend**
 
@@ -81,11 +81,11 @@ Powered by LLMs and a surveillance-aware query engine.
 
 ### **Computer Vision Models**
 
-* **YOLOv8n / YOLOv10n** (object detection)
-* **DeepSORT / ByteTrack** (multi-object tracking)
-* **MoveNet** (behavior pose analysis)
-* **MediaPipe FaceMesh** (face covering & head turns)
-* **FaceNet / InsightFace** (suspect identification)
+* **YOLOv8n / YOLOv10n (object detection)**
+* **DeepSORT / ByteTrack (multi-object tracking)**
+* **MoveNet (behavior pose analysis)**
+* **MediaPipe FaceMesh (face covering & head turns)**
+* **FaceNet / InsightFace (suspect identification)**
 
 ### **AI Chat System using OpenAI or Llama**
 
