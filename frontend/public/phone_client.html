@@ -1,0 +1,126 @@
+<!-- phone_client.html -->
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Phone Capture -> WS</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 12px; }
+    video { width: 100%; max-width: 720px; border: 1px solid #444; }
+    button { margin-top: 8px; padding: 8px 12px; }
+  </style>
+</head>
+<body>
+  <h3>Phone Camera – Send frames to backend</h3>
+  <video id="video" autoplay playsinline muted></video>
+  <div>
+    <label>FPS:
+      <select id="fps">
+        <option value="1">1</option>
+        <option value="2">2</option>
+        <option value="5" selected>5</option>
+        <option value="10">10</option>
+      </select>
+    </label>
+    <button id="start">Start</button>
+    <button id="stop" disabled>Stop</button>
+    <div id="status" style="margin-top:8px;color:green"></div>
+  </div>
+
+<script>
+const video = document.getElementById('video');
+const startBtn = document.getElementById('start');
+const stopBtn = document.getElementById('stop');
+const status = document.getElementById('status');
+const fpsSelect = document.getElementById('fps');
+
+let ws = null;
+let intervalId = null;
+
+// Replace <PC_IP> with your laptop IP and port where backend runs (example: ws://192.168.29.239:8000/ws/frames)
+const WS_URL = "ws://192.168.42.111:8000/ws/frames";
+
+async function startCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+    video.srcObject = stream;
+    await video.play();
+    status.innerText = "Camera ready";
+    return true;
+  } catch (err) {
+    console.error("Camera error", err);
+    status.innerText = "Camera error: " + err.message;
+    return false;
+  }
+}
+
+function connectWS() {
+  ws = new WebSocket(WS_URL);
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => { status.innerText = "WS connected"; };
+  ws.onclose = () => { status.innerText = "WS closed"; };
+  ws.onerror = (e) => { console.error("WS error", e); status.innerText = "WS error"; };
+  ws.onmessage = (ev) => {
+    // backend messages (JSON)
+    try {
+      const data = JSON.parse(ev.data);
+      console.log("From server:", data);
+    } catch (e) { console.log("Raw message", ev.data); }
+  };
+}
+
+function startSending() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) { connectWS(); }
+  const fps = Number(fpsSelect.value);
+  const intervalMs = Math.round(1000 / fps);
+
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+
+  intervalId = setInterval(async () => {
+    if (!video.videoWidth || !video.videoHeight) return;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    // convert to JPEG blob
+    canvas.toBlob(async (blob) => {
+      if (!blob) return;
+      try {
+        // send blob as raw binary via WebSocket
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          // We send just the binary JPEG bytes.
+          ws.send(await blob.arrayBuffer());
+        }
+      } catch (err) {
+        console.error("Send error:", err);
+      }
+    }, "image/jpeg", 0.7);
+  }, intervalMs);
+}
+
+startBtn.addEventListener('click', async () => {
+  startBtn.disabled = true;
+  const ok = await startCamera();
+  if (!ok) { startBtn.disabled = false; return; }
+  connectWS();
+  // small delay to let ws connect
+  setTimeout(() => {
+    startSending();
+    stopBtn.disabled = false;
+    status.innerText = "Streaming frames...";
+  }, 300);
+});
+
+stopBtn.addEventListener('click', () => {
+  stopBtn.disabled = true;
+  startBtn.disabled = false;
+  if (intervalId) { clearInterval(intervalId); intervalId = null; }
+  if (ws) { ws.close(); ws = null; }
+  const tracks = video.srcObject?.getTracks?.();
+  if (tracks) tracks.forEach(t => t.stop());
+  video.srcObject = null;
+  status.innerText = "Stopped";
+});
+</script>
+</body>
+</html>
