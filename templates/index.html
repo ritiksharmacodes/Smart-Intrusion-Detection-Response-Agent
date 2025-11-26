@@ -1,0 +1,40 @@
+<!-- templates/index.html -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Smart Intrusion Detection Response Agent - Live Computer Vision Stream – Powered by YOLOv8</title>
+  <link rel="icon" type="image/svg+xml" href="../static/icon.svg" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <div class="container">
+    <h1>Unified Visual Analytics & Compliance System - Powered by YOLOv8</h1>
+
+    <section class="upload">
+      <form id="uploadForm" action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data">
+        <label class="file-label">
+          <input type="file" name="video" accept="video/*" required />
+          <span>Select a video (mp4 / avi / mov / mkv)</span>
+        </label>
+        <button class="btn" type="submit">Upload & Open</button>
+      </form>
+    </section>
+
+    <section class="recent">
+      <h3>Recent uploads</h3>
+      <ul>
+        {% for f in uploads %}
+          <li><a href="{{ url_for('view_file', filename=f) }}">{{ f }}</a></li>
+        {% else %}
+          <li>No uploads yet</li>
+        {% endfor %}
+      </ul>
+    </section>
+
+    <footer>
+      <small>After upload click the file link to open viewer with Start / Stop buttons.</small>
+    </footer>
+  </div>
+</body>
+</html>
