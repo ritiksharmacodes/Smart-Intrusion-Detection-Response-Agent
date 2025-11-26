@@ -7,6 +7,65 @@ from flask import Flask, request, redirect, url_for, render_template, send_from_
 import cv2
 import numpy as np
 from ultralytics import YOLO
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from dotenv import load_dotenv
+
+load_dotenv()
+DB_URL = os.getenv("SUPABASE_DB_URL")
+
+def get_db():
+    return psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
+
+def db_create_video(filename, fps=None, width=None, height=None):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO videos (filename, fps, width, height)
+        VALUES (%s, %s, %s, %s)
+        RETURNING video_id;
+    """, (filename, fps, width, height))
+    video_id = cur.fetchone()["video_id"]
+    conn.commit()
+    conn.close()
+    return video_id
+
+
+
+def db_create_track(video_id, label="person"):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO tracks (video_id, label)
+        VALUES (%s, %s)
+        RETURNING track_id;
+    """, (video_id, label))
+    tid = cur.fetchone()["track_id"]
+    conn.commit()
+    conn.close()
+    return tid
+
+
+def db_insert_position(track_id, timestamp_ms, x_center, y_center):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO track_positions (track_id, timestamp_ms, x_center, y_center)
+        VALUES (%s, %s, %s, %s);
+    """, (track_id, timestamp_ms, x_center, y_center))
+    conn.commit()
+    conn.close()
+
+
+def db_log_event(video_id, track_id, event_type, severity=1, details=None):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO events (track_id, video_id, event_type, severity, details)
+        VALUES (%s, %s, %s, %s, %s::jsonb);
+    """, (track_id, video_id, event_type, severity, details))
+    conn.commit()
+    conn.close()
 
 # ---------------- CONFIG ----------------
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -73,15 +132,107 @@ def ensure_control_entry(filename):
                 "last_frame": None,
                 "last_count": 0,
                 "counts_sum": 0,
-                "counts_frames": 0
+                "counts_frames": 0,
+                "tracks": {}          # NEW: per-ID tracks
             }
+
     return controls[filename]
+
+def match_tracks(tracks, detections, dist_thresh=50):
+    """
+    Simple centroid-based tracker.
+    detections = [(x1, y1, x2, y2, conf), ...]
+    Returns: list of (track_id, centroid_x)
+    """
+    import math
+
+    centroids = []
+    for (x1, y1, x2, y2, conf) in detections:
+        cx = (x1 + x2) / 2
+        centroids.append(cx)
+
+    assigned = []
+    used_ids = set()
+
+    # match each detected centroid to nearest existing track
+    for cx in centroids:
+        best_id = None
+        best_dist = float("inf")
+
+        for tid, tdata in tracks.items():
+            if tid in used_ids:
+                continue
+            if not tdata["history"]:
+                continue
+
+            last_cx = tdata["history"][-1][1]
+            dist = abs(cx - last_cx)
+
+            if dist < best_dist and dist < dist_thresh:
+                best_id = tid
+                best_dist = dist
+
+        if best_id is None:
+            # Create database-backed track_id
+            db_tid = db_create_track(ctrl["video_id"])
+
+            tracks[db_tid] = {
+                "history": [],
+                "direction_flips": 0,
+                "last_direction": None,
+                "is_pacing": False,
+                "db_id": db_tid,     # database track_id
+                "already_logged": False
+            }
+
+            best_id = db_tid
+
+        used_ids.add(best_id)
+        assigned.append((best_id, cx))
+
+    return assigned
+
+
+def check_pacing(track_data, flip_threshold=3, min_move=20, window_seconds=10):
+    """
+    Updates track_data["is_pacing"] based on movement history.
+    """
+    history = track_data["history"]
+
+    # remove old entries
+    cutoff = time.time() - window_seconds
+    history[:] = [h for h in history if h[0] >= cutoff]
+
+    if len(history) < 4:
+        track_data["is_pacing"] = False
+        return
+
+    # compute directions
+    directions = []
+    for i in range(1, len(history)):
+        dx = history[i][1] - history[i-1][1]
+        if abs(dx) < min_move:
+            continue
+        directions.append("R" if dx > 0 else "L")
+
+    if len(directions) < 3:
+        track_data["is_pacing"] = False
+        return
+
+    # count flips
+    flips = 0
+    for i in range(1, len(directions)):
+        if directions[i] != directions[i-1]:
+            flips += 1
+
+    track_data["is_pacing"] = flips >= flip_threshold
+
 
 def mjpeg_generator(video_path, filename):
     """
     Generator that yields multipart JPEG frames for MJPEG streaming.
     It updates controls[filename] stats (last_count, counts_sum, counts_frames).
-    The displayed frames do NOT include the 'People: N' overlay (per user request).
+    The displayed frames do NOT include the 'People: N' overlay.
     """
     model = load_model()
     ctrl = ensure_control_entry(filename)
@@ -96,7 +247,7 @@ def mjpeg_generator(video_path, filename):
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
     print(f"[STREAM] open {video_path} size=({orig_w}x{orig_h}) fps={fps}")
 
-    # compute detection scale (preserve aspect ratio)
+    # compute detection scale
     if orig_w > DETECT_WIDTH:
         scale = DETECT_WIDTH / orig_w
         detect_w = int(orig_w * scale)
@@ -115,7 +266,6 @@ def mjpeg_generator(video_path, filename):
 
     try:
         while True:
-            # read next frame only if running; else, keep last_frame repeating (freeze)
             with ctrl["lock"]:
                 running = ctrl["running"]
 
@@ -124,8 +274,8 @@ def mjpeg_generator(video_path, filename):
                 if not ret:
                     print("[STREAM] end of video.")
                     break
-                frame_idx += 1
 
+                frame_idx += 1
                 do_detect = (frame_idx % FRAME_SKIP == 0)
 
                 if do_detect:
@@ -136,7 +286,6 @@ def mjpeg_generator(video_path, filename):
                         small = frame
 
                     imgsz = int((detect_w + 31) // 32) * 32
-                    # Run inference
                     results = model.predict(
                         source=small,
                         imgsz=imgsz,
@@ -145,12 +294,15 @@ def mjpeg_generator(video_path, filename):
                         half=use_half,
                         verbose=False,
                     )
+
                     r = results[0]
                     boxes_np = r.boxes.xyxy.cpu().numpy() if len(r.boxes) else np.array([])
                     last_boxes = []
+
                     for b in boxes_np:
                         x1, y1, x2, y2 = b[:4]
                         conf_score = float(b[4]) if b.shape[0] > 4 else 0.0
+
                         if scale != 1.0:
                             x1 = int(x1 / scale)
                             y1 = int(y1 / scale)
@@ -158,60 +310,98 @@ def mjpeg_generator(video_path, filename):
                             y2 = int(y2 / scale)
                         else:
                             x1, y1, x2, y2 = map(int, (x1, y1, x2, y2))
+
                         last_boxes.append((x1, y1, x2, y2, conf_score))
+
                     last_count = len(last_boxes)
 
-                # draw boxes and label on a copy, BUT do NOT draw the people count overlay
+                    # ----------------------------------------------------
+                    # ---- TRACKING + PACING ----
+                    # ----------------------------------------------------
+                    assigned = match_tracks(ctrl["tracks"], last_boxes)
+                    now = time.time()
+
+                    for (tid, cx) in assigned:
+                        t = ctrl["tracks"][tid]
+                        t["history"].append((now, cx))
+                        check_pacing(t)
+                        # LOG PACING EVENT TO DATABASE (only once per person per video)
+                        if t["is_pacing"] and not t.get("already_logged"):
+                            t["already_logged"] = True  # prevents spamming multiple events
+
+                            details = json.dumps({
+                                "flips": t.get("direction_flips"),
+                                "window_seconds": 10
+                            })
+
+                            db_log_event(
+                                video_id=ctrl["video_id"],
+                                track_id=t["db_id"],    # database track_id
+                                event_type="pacing",
+                                severity=1,
+                                details=details
+                            )
+
+
+                # draw boxes
                 disp = frame.copy()
                 if last_boxes:
                     for (x1, y1, x2, y2, conf_score) in last_boxes:
                         cv2.rectangle(disp, (x1, y1), (x2, y2), (0, 255, 0), 2)
                         label = f"person {conf_score:.2f}"
                         cv2.putText(disp, label, (x1, max(15, y1 - 6)),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255,255,255), 1, cv2.LINE_AA)
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                                    (255, 255, 255), 1, cv2.LINE_AA)
 
-                # optionally resize for display to reduce bandwidth
+                # resize for display
                 if OUTPUT_DISPLAY_WIDTH and disp.shape[1] > OUTPUT_DISPLAY_WIDTH:
                     scale_out = OUTPUT_DISPLAY_WIDTH / disp.shape[1]
                     new_w = OUTPUT_DISPLAY_WIDTH
                     new_h = int(disp.shape[0] * scale_out)
                     disp = cv2.resize(disp, (new_w, new_h))
 
-                # encode JPEG with lower quality to speed up transfer
                 encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
                 success, jpeg = cv2.imencode('.jpg', disp, encode_params)
                 if not success:
                     continue
+
                 frame_bytes = jpeg.tobytes()
 
-                # update control stats under lock
                 with ctrl["lock"]:
                     ctrl["last_frame"] = frame_bytes
                     ctrl["last_count"] = last_count
-                    # record for averaging: count the value for this streamed frame
                     ctrl["counts_sum"] += last_count
                     ctrl["counts_frames"] += 1
 
-                # yield frame
                 yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                       b'Content-Type: image/jpeg\r\n\r\n' +
+                       frame_bytes + b'\r\n')
+
             else:
-                # paused: repeat last frame (freeze). If no last frame, show a simple text frame
+                # paused mode
                 with ctrl["lock"]:
                     lf = ctrl.get("last_frame")
+
                 if lf is not None:
                     yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n' + lf + b'\r\n')
+                           b'Content-Type: image/jpeg\r\n\r\n' +
+                           lf + b'\r\n')
                 else:
                     placeholder = 255 * np.ones((240, 320, 3), dtype=np.uint8)
-                    cv2.putText(placeholder, "PAUSED", (40, 120), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0,0,255), 3)
+                    cv2.putText(
+                        placeholder, "PAUSED",
+                        (40, 120), cv2.FONT_HERSHEY_SIMPLEX,
+                        1.5, (0, 0, 255), 3
+                    )
                     success, jpeg = cv2.imencode('.jpg', placeholder)
                     if success:
                         pb = jpeg.tobytes()
                         yield (b'--frame\r\n'
-                               b'Content-Type: image/jpeg\r\n\r\n' + pb + b'\r\n')
-                # avoid busy-looping when paused
+                               b'Content-Type: image/jpeg\r\n\r\n' +
+                               pb + b'\r\n')
+
                 time.sleep(0.1)
+
     except GeneratorExit:
         print("[STREAM] generator exit for", filename)
     except Exception:
@@ -219,6 +409,8 @@ def mjpeg_generator(video_path, filename):
     finally:
         cap.release()
         print("[STREAM] closed", video_path)
+
+
 
 # Routes & frontend integration
 @app.route("/")
@@ -242,8 +434,13 @@ def upload():
     file.save(input_path)
     print(f"[UPLOAD] saved to: {input_path}")
 
-    # initialize control entry
-    ensure_control_entry(safe_name)
+    # ---- DB: create video record ----
+    video_id = db_create_video(safe_name)
+
+    # ---- initialize control entry ----
+    ctrl_entry = ensure_control_entry(safe_name)
+    ctrl_entry["video_id"] = video_id
+
     return redirect(url_for("view_file", filename=safe_name))
 
 @app.route("/view/<path:filename>")
@@ -286,19 +483,36 @@ def control():
 def stats():
     """
     Query params: ?file=<filename>
-    Returns JSON: {"ok": True, "current_count": int, "avg_people": float}
+    Returns JSON: {"ok": True, "current_count": int, "avg_people": float, "suspicious_pacing": bool}
     """
     filename = request.args.get("file")
     if not filename:
         return jsonify({"ok": False, "error": "missing file param"}), 400
+
     safe = os.path.basename(filename)
     ctrl = ensure_control_entry(safe)
+
     with ctrl["lock"]:
         current = int(ctrl.get("last_count", 0))
         sumc = int(ctrl.get("counts_sum", 0))
         frames = int(ctrl.get("counts_frames", 0))
+
+        # NEW — check if any track is pacing
+        pacing_detected = any(
+            t.get("is_pacing", False)
+            for t in ctrl.get("tracks", {}).values()
+        )
+
     avg = (sumc / frames) if frames > 0 else 0.0
-    return jsonify({"ok": True, "current_count": current, "avg_people": round(avg, 2)})
+
+    return jsonify({
+        "ok": True,
+        "current_count": current,
+        "avg_people": round(avg, 2),
+        "suspicious_pacing": pacing_detected    # NEW FIELD
+    })
+
+
 
 @app.route("/download/<folder>/<filename>")
 def download_file(folder, filename):

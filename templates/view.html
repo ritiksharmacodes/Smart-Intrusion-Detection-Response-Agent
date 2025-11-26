@@ -46,6 +46,11 @@
           </div>
 
           <!-- Future metrics can be added below easily -->
+           <div class="metric-row" style="display:flex; justify-content:space-between; margin-bottom:8px;">
+              <div class="metric-label" style="color:#9ca3af;">Suspicious pacing:</div>
+              <div id="pacingStatus" class="metric-value" style="color:#0b84ff; font-weight:700;">—</div>
+          </div>
+
         </div>
       </div>
     </div>
@@ -93,7 +98,7 @@
         const j = await res.json();
         if (j && j.ok) {
           currentCountEl.textContent = j.current_count;
-          avgCountEl.textContent = j.avg_people.toFixed ? j.avg_people.toFixed(2) : j.avg_people;
+          document.getElementById("pacingStatus").textContent = j.suspicious_pacing ? "Yes" : "No";
         }
       } catch (e) {
         // ignore transient errors
