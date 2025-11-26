@@ -51,6 +51,11 @@
               <div id="pacingStatus" class="metric-value" style="color:#0b84ff; font-weight:700;">—</div>
           </div>
 
+          <div class="metric-row" style="display:flex; justify-content:space-between; margin-bottom:8px;">
+            <div class="metric-label" style="color:#9ca3af;">Loitering detected:</div>
+            <div id="loiteringStatus" class="metric-value" style="color:#0b84ff; font-weight:700;">—</div>
+          </div>
+
         </div>
       </div>
     </div>
@@ -99,6 +104,8 @@
         if (j && j.ok) {
           currentCountEl.textContent = j.current_count;
           document.getElementById("pacingStatus").textContent = j.suspicious_pacing ? "Yes" : "No";
+          document.getElementById("loiteringStatus").textContent =
+            j.loitering_detected ? "Yes" : "No";
         }
       } catch (e) {
         // ignore transient errors

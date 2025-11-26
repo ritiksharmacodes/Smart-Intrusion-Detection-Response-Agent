@@ -7,65 +7,6 @@ from flask import Flask, request, redirect, url_for, render_template, send_from_
 import cv2
 import numpy as np
 from ultralytics import YOLO
-import psycopg2
-from psycopg2.extras import RealDictCursor
-from dotenv import load_dotenv
-
-load_dotenv()
-DB_URL = os.getenv("SUPABASE_DB_URL")
-
-def get_db():
-    return psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
-
-def db_create_video(filename, fps=None, width=None, height=None):
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO videos (filename, fps, width, height)
-        VALUES (%s, %s, %s, %s)
-        RETURNING video_id;
-    """, (filename, fps, width, height))
-    video_id = cur.fetchone()["video_id"]
-    conn.commit()
-    conn.close()
-    return video_id
-
-
-
-def db_create_track(video_id, label="person"):
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO tracks (video_id, label)
-        VALUES (%s, %s)
-        RETURNING track_id;
-    """, (video_id, label))
-    tid = cur.fetchone()["track_id"]
-    conn.commit()
-    conn.close()
-    return tid
-
-
-def db_insert_position(track_id, timestamp_ms, x_center, y_center):
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO track_positions (track_id, timestamp_ms, x_center, y_center)
-        VALUES (%s, %s, %s, %s);
-    """, (track_id, timestamp_ms, x_center, y_center))
-    conn.commit()
-    conn.close()
-
-
-def db_log_event(video_id, track_id, event_type, severity=1, details=None):
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO events (track_id, video_id, event_type, severity, details)
-        VALUES (%s, %s, %s, %s, %s::jsonb);
-    """, (track_id, video_id, event_type, severity, details))
-    conn.commit()
-    conn.close()
 
 # ---------------- CONFIG ----------------
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -144,8 +85,6 @@ def match_tracks(tracks, detections, dist_thresh=50):
     detections = [(x1, y1, x2, y2, conf), ...]
     Returns: list of (track_id, centroid_x)
     """
-    import math
-
     centroids = []
     for (x1, y1, x2, y2, conf) in detections:
         cx = (x1 + x2) / 2
@@ -159,38 +98,39 @@ def match_tracks(tracks, detections, dist_thresh=50):
         best_id = None
         best_dist = float("inf")
 
-        for tid, tdata in tracks.items():
+        # find nearest existing track (only tracks with history)
+        for tid, tdata in list(tracks.items()):
             if tid in used_ids:
                 continue
-            if not tdata["history"]:
+            if not tdata.get("history"):
                 continue
-
             last_cx = tdata["history"][-1][1]
             dist = abs(cx - last_cx)
-
             if dist < best_dist and dist < dist_thresh:
                 best_id = tid
                 best_dist = dist
 
+        # if no match, create a new incremental integer track id
         if best_id is None:
-            # Create database-backed track_id
-            db_tid = db_create_track(ctrl["video_id"])
-
-            tracks[db_tid] = {
+            # pick smallest positive integer not in tracks
+            new_id = 1
+            while new_id in tracks:
+                new_id += 1
+            # initialize track structure
+            tracks[new_id] = {
                 "history": [],
                 "direction_flips": 0,
                 "last_direction": None,
                 "is_pacing": False,
-                "db_id": db_tid,     # database track_id
-                "already_logged": False
+                "is_loitering": False
             }
-
-            best_id = db_tid
+            best_id = new_id
 
         used_ids.add(best_id)
         assigned.append((best_id, cx))
 
     return assigned
+
 
 
 def check_pacing(track_data, flip_threshold=3, min_move=20, window_seconds=10):
@@ -226,6 +166,35 @@ def check_pacing(track_data, flip_threshold=3, min_move=20, window_seconds=10):
             flips += 1
 
     track_data["is_pacing"] = flips >= flip_threshold
+
+
+def check_loitering(track_data, window_seconds=15, movement_threshold=40):
+    """
+    Marks is_loitering=True if the person stays within a small movement range
+    for at least `window_seconds`.
+    """
+    history = track_data["history"]
+
+    # trim old entries
+    cutoff = time.time() - window_seconds
+    history[:] = [h for h in history if h[0] >= cutoff]
+
+    if len(history) < 6:  # ensure enough samples
+        track_data["is_loitering"] = False
+        return
+
+    xs = [h[1] for h in history]
+    ys = [h[2] for h in history]
+
+    # compute movement range
+    dx = max(xs) - min(xs)
+    dy = max(ys) - min(ys)
+
+    max_movement = max(dx, dy)
+
+    # decide
+    track_data["is_loitering"] = max_movement < movement_threshold
+
 
 
 def mjpeg_generator(video_path, filename):
@@ -321,27 +290,20 @@ def mjpeg_generator(video_path, filename):
                     assigned = match_tracks(ctrl["tracks"], last_boxes)
                     now = time.time()
 
-                    for (tid, cx) in assigned:
+                    for idx, (tid, cx) in enumerate(assigned):
                         t = ctrl["tracks"][tid]
-                        t["history"].append((now, cx))
+                        # get corresponding detection box to compute y-center
+                        (x1, y1, x2, y2, _) = last_boxes[idx]
+                        cy = (y1 + y2) / 2
+
+                        # store (timestamp, x-center, y-center)
+                        t["history"].append((now, cx, cy))
+
+                        # run pacing
                         check_pacing(t)
-                        # LOG PACING EVENT TO DATABASE (only once per person per video)
-                        if t["is_pacing"] and not t.get("already_logged"):
-                            t["already_logged"] = True  # prevents spamming multiple events
 
-                            details = json.dumps({
-                                "flips": t.get("direction_flips"),
-                                "window_seconds": 10
-                            })
-
-                            db_log_event(
-                                video_id=ctrl["video_id"],
-                                track_id=t["db_id"],    # database track_id
-                                event_type="pacing",
-                                severity=1,
-                                details=details
-                            )
-
+                        # run loitering
+                        check_loitering(t)
 
                 # draw boxes
                 disp = frame.copy()
@@ -434,12 +396,8 @@ def upload():
     file.save(input_path)
     print(f"[UPLOAD] saved to: {input_path}")
 
-    # ---- DB: create video record ----
-    video_id = db_create_video(safe_name)
-
-    # ---- initialize control entry ----
+    # initialize control entry
     ctrl_entry = ensure_control_entry(safe_name)
-    ctrl_entry["video_id"] = video_id
 
     return redirect(url_for("view_file", filename=safe_name))
 
@@ -502,6 +460,10 @@ def stats():
             t.get("is_pacing", False)
             for t in ctrl.get("tracks", {}).values()
         )
+        loitering_detected = any(
+            t.get("is_loitering", False)
+            for t in ctrl.get("tracks", {}).values()
+        )
 
     avg = (sumc / frames) if frames > 0 else 0.0
 
@@ -509,8 +471,10 @@ def stats():
         "ok": True,
         "current_count": current,
         "avg_people": round(avg, 2),
-        "suspicious_pacing": pacing_detected    # NEW FIELD
+        "suspicious_pacing": pacing_detected,
+        "loitering_detected": loitering_detected
     })
+
 
 
 
