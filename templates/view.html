@@ -56,6 +56,15 @@
             <div id="loiteringStatus" class="metric-value" style="color:#0b84ff; font-weight:700;">—</div>
           </div>
 
+          <button id="toggleRunningBtn" class="btn secondary" style="width:100%;">
+              Enable Sudden Running Detection
+          </button>
+          <div class="metric-row" style="display:flex; justify-content:space-between; margin-bottom:8px;">
+              <div class="metric-label" style="color:#9ca3af;">Sudden running detected:</div>
+              <div id="runningStatus" class="metric-value" style="color:#0b84ff; font-weight:700;">—</div>
+          </div>
+
+
         </div>
       </div>
     </div>
@@ -77,6 +86,26 @@
     const stopBtn = document.getElementById("stopBtn");
     const currentCountEl = document.getElementById("currentCount");
     const avgCountEl = document.getElementById("avgCount");
+
+    const toggleRunningBtn = document.getElementById("toggleRunningBtn");
+    let runningEnabled = false;
+
+    toggleRunningBtn.onclick = async () => {
+        runningEnabled = !runningEnabled;
+
+        const res = await fetch("/toggle_running", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ file: filename, enabled: runningEnabled })
+        });
+
+        const j = await res.json();
+        if (j.ok) {
+            toggleRunningBtn.textContent = runningEnabled
+                ? "Disable Sudden Running Detection"
+                : "Enable Sudden Running Detection";
+        }
+    };
 
     async function setControl(action) {
       try {
@@ -103,6 +132,8 @@
         const j = await res.json();
         if (j && j.ok) {
           currentCountEl.textContent = j.current_count;
+          document.getElementById("runningStatus").textContent =
+            j.running_detected ? "Yes" : "No";
           document.getElementById("pacingStatus").textContent = j.suspicious_pacing ? "Yes" : "No";
           document.getElementById("loiteringStatus").textContent =
             j.loitering_detected ? "Yes" : "No";

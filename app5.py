@@ -74,7 +74,8 @@ def ensure_control_entry(filename):
                 "last_count": 0,
                 "counts_sum": 0,
                 "counts_frames": 0,
-                "tracks": {}          # NEW: per-ID tracks
+                "tracks": {},          # NEW: per-ID tracks
+                "running_enabled": False      # NEW FLAG
             }
 
     return controls[filename]
@@ -285,25 +286,47 @@ def mjpeg_generator(video_path, filename):
                     last_count = len(last_boxes)
 
                     # ----------------------------------------------------
-                    # ---- TRACKING + PACING ----
+                    # ---- TRACKING + PACING + store last_box per track ----
                     # ----------------------------------------------------
                     assigned = match_tracks(ctrl["tracks"], last_boxes)
                     now = time.time()
 
+                    # Reset a flag to mark which tracks got updated this frame
+                    updated_track_ids = set()
+
                     for idx, (tid, cx) in enumerate(assigned):
                         t = ctrl["tracks"][tid]
                         # get corresponding detection box to compute y-center
+                        # NOTE: assigned order matches last_boxes order (centroid sequence)
                         (x1, y1, x2, y2, _) = last_boxes[idx]
                         cy = (y1 + y2) / 2
 
                         # store (timestamp, x-center, y-center)
                         t["history"].append((now, cx, cy))
 
+                        # store last box for overlay drawing
+                        t["last_box"] = (int(x1), int(y1), int(x2), int(y2))
+
                         # run pacing
                         check_pacing(t)
 
                         # run loitering
                         check_loitering(t)
+
+                        # Only detect running if enabled
+                        if ctrl.get("running_enabled", False):
+                            check_running(t)
+
+                        updated_track_ids.add(tid)
+
+                    # Optionally: prune tracks that haven't been updated for a while
+                    # (keeps ctrl["tracks"] compact). We'll keep them but allow last_box
+                    # to persist briefly so overlays don't flicker. If you prefer to remove
+                    # stale tracks, uncomment below:
+                    # stale_cutoff = time.time() - 8.0
+                    # for tid, tdata in list(ctrl["tracks"].items()):
+                    #     if not tdata.get("history") or tdata["history"][-1][0] < stale_cutoff:
+                    #         del ctrl["tracks"][tid]
 
                 # draw boxes
                 disp = frame.copy()
@@ -314,6 +337,47 @@ def mjpeg_generator(video_path, filename):
                         cv2.putText(disp, label, (x1, max(15, y1 - 6)),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.45,
                                     (255, 255, 255), 1, cv2.LINE_AA)
+                
+                # -------------------
+                # Draw per-track alert overlays (priority: loitering(red) > pacing(yellow))
+                # -------------------
+                # We snapshot tracks under lock to avoid races
+                with ctrl["lock"]:
+                    track_snapshot = {tid: dict(tdata) for tid, tdata in ctrl.get("tracks", {}).items()}
+
+                for tid, tdata in track_snapshot.items():
+                    last_box = tdata.get("last_box")
+                    if not last_box:
+                        continue
+                    x1, y1, x2, y2 = last_box
+                    is_loiter = tdata.get("is_loitering", False)
+                    is_pace = tdata.get("is_pacing", False)
+
+                    # decide color and thickness
+                    if is_loiter:
+                        color = (0, 0, 255)   # red (BGR)
+                        thickness = 4
+                        label = f"LOITERING #{tid}"
+                    elif is_pace:
+                        color = (0, 215, 255) # yellow-ish (BGR)
+                        thickness = 3
+                        label = f"PACING #{tid}"
+                    else:
+                        continue  # not flagged -> skip
+
+                    # draw thicker colored rectangle and semi-transparent fill
+                    cv2.rectangle(disp, (x1, y1), (x2, y2), color, thickness)
+                    # draw filled translucent rectangle behind label for readability
+                    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+                    rect_x2 = x1 + tw + 10
+                    rect_y2 = y1 - 6
+                    rect_y1 = rect_y2 - (th + 8)
+                    # ensure within image bounds
+                    rect_y1 = max(rect_y1, 0)
+                    cv2.rectangle(disp, (x1, rect_y1), (rect_x2, rect_y2), color, -1)
+                    cv2.putText(disp, label, (x1 + 4, rect_y2 - 4),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                                (255, 255, 255), 1, cv2.LINE_AA)
 
                 # resize for display
                 if OUTPUT_DISPLAY_WIDTH and disp.shape[1] > OUTPUT_DISPLAY_WIDTH:
@@ -437,11 +501,39 @@ def control():
         ctrl["running"] = (action == "start")
     return jsonify({"ok": True, "running": ctrl["running"]})
 
+
+@app.route("/toggle_running", methods=["POST"])
+def toggle_running():
+    data = request.get_json(force=True)
+    filename = data.get("file")
+    enabled = data.get("enabled")
+
+    if filename is None or enabled is None:
+        return jsonify({"ok": False, "error": "invalid params"}), 400
+
+    safe = os.path.basename(filename)
+    ctrl = ensure_control_entry(safe)
+
+    with ctrl["lock"]:
+        ctrl["running_enabled"] = bool(enabled)
+
+    print(f"[RUNNING DETECTION] set to {enabled} for {filename}")
+
+    return jsonify({"ok": True, "running_enabled": ctrl['running_enabled']})
+
+
+
 @app.route("/stats")
 def stats():
     """
     Query params: ?file=<filename>
-    Returns JSON: {"ok": True, "current_count": int, "avg_people": float, "suspicious_pacing": bool}
+    Returns JSON with:
+      current_count
+      avg_people
+      suspicious_pacing
+      loitering_detected
+      running_detected
+      running_enabled (toggle state)
     """
     filename = request.args.get("file")
     if not filename:
@@ -451,19 +543,29 @@ def stats():
     ctrl = ensure_control_entry(safe)
 
     with ctrl["lock"]:
+        # basic counts
         current = int(ctrl.get("last_count", 0))
         sumc = int(ctrl.get("counts_sum", 0))
         frames = int(ctrl.get("counts_frames", 0))
 
-        # NEW — check if any track is pacing
+        # feature detections
         pacing_detected = any(
             t.get("is_pacing", False)
             for t in ctrl.get("tracks", {}).values()
         )
+
         loitering_detected = any(
             t.get("is_loitering", False)
             for t in ctrl.get("tracks", {}).values()
         )
+
+        running_detected = any(
+            t.get("is_running", False)
+            for t in ctrl.get("tracks", {}).values()
+        )
+
+        # NEW — whether running detection is enabled by user
+        running_enabled = bool(ctrl.get("running_enabled", False))
 
     avg = (sumc / frames) if frames > 0 else 0.0
 
@@ -472,8 +574,11 @@ def stats():
         "current_count": current,
         "avg_people": round(avg, 2),
         "suspicious_pacing": pacing_detected,
-        "loitering_detected": loitering_detected
+        "loitering_detected": loitering_detected,
+        "running_detected": running_detected,
+        "running_enabled": running_enabled
     })
+
 
 
 
