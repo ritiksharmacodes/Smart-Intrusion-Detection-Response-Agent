@@ -1,12 +1,215 @@
 # app.py -- Fast YOLOv8-n Flask live streamer with start/stop and stats
 import os
 import time
+import re
+import json
+import datetime
+import requests
 import traceback
 from threading import Lock
 from flask import Flask, request, redirect, url_for, render_template, send_from_directory, flash, Response, jsonify
 import cv2
 import numpy as np
 from ultralytics import YOLO
+import google.generativeai as genai
+
+from dotenv import load_dotenv
+load_dotenv()
+
+import urllib.parse
+SUPABASE_URL = os.getenv("SUPABASE_URL")   # e.g. https://xyzcompany.supabase.co
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")   # anon or service_role key
+
+USE_GEMINI_HTTP = True   # set True if you want to call Gemini via REST (needs GOOGLE_API_KEY)
+
+# Load API key
+GEMINI_KEY = os.getenv("GOOGLE_API_KEY")
+genai.configure(api_key=GEMINI_KEY)
+
+# The free, recommended model
+GEMINI_MODEL = "gemini-2.5-pro"
+
+def fetch_events_from_supabase(limit=200):
+    """
+    Fetch recent events from Supabase events table via REST.
+    Returns a list of event dicts or raises/returns None on failure.
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        # Supabase not configured
+        return None
+
+    try:
+        # Build REST endpoint (PostgREST) for table `events`
+        # We request all columns, order by timestamp desc, limit N
+        # Example: GET /rest/v1/events?select=*&order=timestamp.desc&limit=200
+        base = SUPABASE_URL.rstrip("/") + "/rest/v1/events"
+        params = {
+            "select": "*",
+            "order": "timestamp.desc",
+            "limit": str(limit)
+        }
+        url = base + "?" + urllib.parse.urlencode(params)
+
+        headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json"
+        }
+
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            events = resp.json()
+            # Normalize timestamps to ISO strings if needed (Postgres timestamptz usually okay)
+            for ev in events:
+                # Ensure keys exist (optional)
+                if "event_type" not in ev and "type" in ev:
+                    ev["event_type"] = ev.get("type")
+            return events
+        else:
+            print("[Supabase] fetch failed:", resp.status_code, resp.text)
+            return None
+
+    except Exception as e:
+        print("[Supabase] exception fetching events:", e)
+        return None
+
+
+def parse_time_string(s):
+    """Try to parse a time-like string 'YYYY-MM-DD HH:MM[:SS]' or 'HH:MM' (today). Return datetime or None."""
+    s = s.strip()
+    try:
+        # full timestamp
+        return datetime.datetime.fromisoformat(s)
+    except Exception:
+        pass
+    # try HH:MM or HH:MM:SS (assume today)
+    m = re.match(r"^(\d{1,2}):(\d{2})(?::(\d{2}))?$", s)
+    if m:
+        now = datetime.datetime.now()
+        hh = int(m.group(1))
+        mm = int(m.group(2))
+        ss = int(m.group(3) or 0)
+        return datetime.datetime(now.year, now.month, now.day, hh, mm, ss)
+    return None
+
+def find_events_by_text(query, events):
+    """Simple extractor: returns events that match types or camera names or times mentioned in query."""
+    q = query.lower()
+
+    # detect event types
+    matches = []
+    event_type_keywords = {
+        "running": ["run", "running", "sprint", "sudden run"],
+        "loitering": ["loiter", "loitering", "linger"],
+        "pacing": ["pace", "pacing", "walking back and forth", "suspicious pacing"],
+    }
+
+    wanted_types = set()
+    for et, kws in event_type_keywords.items():
+        for kw in kws:
+            if kw in q:
+                wanted_types.add(et)
+
+    # detect camera names by simple heuristics (Gate, Corridor, Entrance)
+    wanted_cameras = []
+    for ev in events:
+        cam = ev.get("camera", "")
+        if cam and cam.lower() in q:
+            wanted_cameras.append(cam)
+
+    # detect simple time ranges like "between HH:MM and HH:MM" or "last N minutes"
+    time_from = None
+    time_to = None
+    m = re.search(r"between\s+(\d{1,2}:\d{2})\s+and\s+(\d{1,2}:\d{2})", q)
+    if m:
+        t1 = parse_time_string(m.group(1))
+        t2 = parse_time_string(m.group(2))
+        if t1 and t2:
+            time_from = t1
+            time_to = t2
+
+    m2 = re.search(r"last\s+(\d+)\s+minute", q)
+    if m2:
+        minutes = int(m2.group(1))
+        time_to = datetime.datetime.now()
+        time_from = time_to - datetime.timedelta(minutes=minutes)
+
+    # if user asked "today" / "yesterday"
+    if "today" in q and not time_from:
+        today = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        time_from = today
+        time_to = datetime.datetime.now()
+    if "yesterday" in q and not time_from:
+        today = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        yesterday = today - datetime.timedelta(days=1)
+        time_from = yesterday
+        time_to = today - datetime.timedelta(microseconds=1)
+
+    # scan events
+    for ev in events:
+        ev_ts = None
+        try:
+            ev_ts = datetime.datetime.fromisoformat(ev["timestamp"])
+        except Exception:
+            pass
+
+        # filter by type if requested
+        if wanted_types and ev["event_type"] not in wanted_types:
+            continue
+
+        # filter by camera if user mentioned a camera
+        if wanted_cameras and ev.get("camera") not in wanted_cameras:
+            continue
+
+        # filter by time range
+        if time_from and ev_ts:
+            if time_to is None:
+                time_to = datetime.datetime.now()
+            if not (time_from <= ev_ts <= time_to):
+                continue
+
+        matches.append(ev)
+
+    return matches
+
+def local_answer_from_events(query, events):
+    """Produce a concise, factual reply from events using simple rules."""
+    q = query.lower().strip()
+
+    # quick common queries
+    if "any" in q and ("running" in q or "run" in q):
+        matches = find_events_by_text(query, events)
+        if not matches:
+            return "No running events found in the available data."
+        # return brief summary
+        lines = []
+        for ev in matches:
+            lines.append(f"{ev['timestamp']}: running (track {ev.get('track_id')}) at {ev.get('camera')}")
+        return "Found running events:\n" + "\n".join(lines)
+
+    if "summary" in q or "what happened" in q or "show me" in q or "events" in q:
+        matches = find_events_by_text(query, events)
+        if not matches:
+            return "No matching events found in the available data."
+        # group by type
+        bytype = {}
+        for ev in matches:
+            bytype.setdefault(ev["event_type"], []).append(ev)
+        parts = []
+        for et, arr in bytype.items():
+            parts.append(f"{len(arr)} {et} event(s)")
+        return "Summary: " + ", ".join(parts) + ". Use a more specific query to get details."
+
+    # fallback: list matching events for keywords
+    matches = find_events_by_text(query, events)
+    if matches:
+        lines = [f"{ev['timestamp']}: {ev['event_type']} (track {ev.get('track_id')}) at {ev.get('camera')}" for ev in matches]
+        return "\n".join(lines)
+
+    # if nothing matched, be explicit
+    return "I couldn't find any events matching your question in the available dummy data. Try asking about 'running', 'loitering', or 'pacing', or provide a time range."
+
+
 
 # ---------------- CONFIG ----------------
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -510,6 +713,7 @@ def mjpeg_generator(video_path, filename):
 
 
 # Routes & frontend integration
+
 @app.route("/")
 def index():
     uploads = sorted(os.listdir(app.config["UPLOAD_FOLDER"]), reverse=True)
@@ -716,6 +920,72 @@ def download_file(folder, filename):
         return "Invalid folder", 400
     directory = UPLOAD_FOLDER if folder == "uploads" else OUTPUT_FOLDER
     return send_from_directory(directory, filename, as_attachment=True)
+
+
+
+
+
+
+# ---------------------------
+# Updated /ask_ai route (Supabase-backed)
+# ---------------------------
+@app.route("/ask_ai", methods=["POST"])
+def ask_ai():
+    data = request.get_json()
+    query = (data.get("query") or "").strip()
+
+    if not query:
+        return jsonify({"reply": "Please enter a question."})
+
+    # Try to fetch real events from Supabase
+    events = fetch_events_from_supabase(limit=400)
+    if not events:
+        # fallback to dummy events that already exist in file
+        events = dummy_events
+
+    # Build the system prompt with the real events (trim to avoid very large prompts)
+    try:
+        # Keep prompt short: include at most 150 events to avoid giant prompts
+        prompt_events = events[:150] if isinstance(events, list) else events
+        system_text = (
+            "You are a CCTV surveillance assistant. Use ONLY the event data provided below to answer the user's question. "
+            "If the user asks about something not present in the events, say so clearly. Be concise and factual.\n\n"
+            "EVENTS (most recent first):\n" + json.dumps(prompt_events, indent=2)
+        )
+    except Exception:
+        # In case events are not serializable for some reason
+        system_text = "You are a CCTV surveillance assistant. Use only the provided events."
+
+    # If Gemini key not configured, use the local responder
+    if not GEMINI_KEY:
+        return jsonify({"reply": local_answer_from_events(query, events)})
+
+    # Call Gemini via official SDK (genai) as you already do
+    try:
+        # Build model (use model name already defined in file)
+        model = genai.GenerativeModel(model_name=GEMINI_MODEL, system_instruction=system_text)
+
+        # For the current SDK you used earlier: generate content
+        response = model.generate_content(query)
+
+        reply = response.text.strip() if response and getattr(response, "text", None) else None
+        if reply:
+            return jsonify({"reply": reply})
+        else:
+            # fallback to local summary if model returns empty
+            return jsonify({"reply": local_answer_from_events(query, events)})
+    except Exception as e:
+        print("Gemini ERROR in Supabase ask_ai:", e)
+        # As a robust fallback return a local rule-based answer built from the fetched events
+        try:
+            return jsonify({"reply": local_answer_from_events(query, events)})
+        except Exception as e2:
+            print("Local fallback also failed:", e2)
+            return jsonify({"reply": "Error processing request."}), 500
+
+
+
+
 
 if __name__ == "__main__":
     print("Starting server...")

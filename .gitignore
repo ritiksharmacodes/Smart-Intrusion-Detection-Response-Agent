@@ -1,4 +1,5 @@
 myenv
 outputs
 uploads
-Smart-Intrusion-Detection-Response-Agent-database.txt
+dbp.txt
+.env
