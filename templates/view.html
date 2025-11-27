@@ -1,167 +1,1108 @@
-<!-- templates/view.html -->
 <!doctype html>
 <html lang="en">
+
 <head>
-  <meta charset="utf-8" />
-  <title>Smart Intrusion Detection Response Agent - Live Computer Vision Stream – Powered by YOLOv8</title>
-  <link rel="icon" type="image/svg+xml" href="../static/icon.svg" />
-  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <meta charset="utf-8" />
+    <title>Smart Intrusion Detection - Live Monitoring</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary: #00d4ff;
+            --primary-dark: #0099cc;
+            --danger: #ff4757;
+            --danger-glow: rgba(255, 71, 87, 0.4);
+            --success: #2ed573;
+            --bg-dark: #0a0e1a;
+            --bg-card: #131824;
+            --bg-elevated: #1a202e;
+            --text-primary: #ffffff;
+            --text-secondary: #a0aec0;
+            --text-muted: #718096;
+            --border: rgba(255, 255, 255, 0.08);
+            --glow-primary: rgba(0, 212, 255, 0.3);
+            --glow-strong: rgba(0, 212, 255, 0.5);
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #0a0e1a 0%, #1a1f35 50%, #0a0e1a 100%);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: radial-gradient(circle at 20% 20%, rgba(0, 212, 255, 0.05) 0%, transparent 50%),
+                radial-gradient(circle at 80% 80%, rgba(46, 213, 115, 0.03) 0%, transparent 50%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+            position: relative;
+            z-index: 1;
+        }
+
+        /* Header */
+        .header {
+            margin-bottom: 2.5rem;
+            animation: fadeSlideDown 0.6s ease-out;
+        }
+
+        .header h1 {
+            font-size: 2rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--primary), var(--success));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 0.5rem;
+            letter-spacing: -0.5px;
+        }
+
+        .header-meta {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .filename-badge {
+            background: var(--bg-elevated);
+            padding: 0.5rem 1rem;
+            border-radius: 0.75rem;
+            border: 1px solid var(--border);
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .filename-badge strong {
+            color: var(--text-primary);
+            font-weight: 600;
+        }
+
+        /* Buttons */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.75rem;
+            font-weight: 600;
+            font-size: 0.875rem;
+            cursor: pointer;
+            border: none;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            text-decoration: none;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.1);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s, height 0.6s;
+        }
+
+        .btn:hover::before {
+            width: 300px;
+            height: 300px;
+        }
+
+        .btn span {
+            position: relative;
+            z-index: 1;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            color: var(--bg-dark);
+            box-shadow: 0 4px 20px var(--glow-primary);
+        }
+
+        .btn-primary:hover {
+            box-shadow: 0 6px 30px var(--glow-strong);
+            transform: translateY(-2px);
+        }
+
+        .btn-secondary {
+            background: var(--bg-elevated);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover {
+            border-color: var(--primary);
+            background: var(--bg-card);
+        }
+
+        .btn-outline {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+        }
+
+        .btn-outline:hover {
+            color: var(--text-primary);
+            border-color: var(--primary);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* Main Grid */
+        .main-grid {
+            display: grid;
+            grid-template-columns: 1fr 400px;
+            gap: 2rem;
+            margin-bottom: 3rem;
+            animation: fadeIn 0.8s ease-out 0.2s both;
+        }
+
+        /* Video Container */
+        .video-section {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .video-container {
+            position: relative;
+            background: var(--bg-card);
+            border-radius: 1.5rem;
+            overflow: hidden;
+            border: 1px solid var(--border);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+        }
+
+        .video-container::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, var(--primary), var(--success), var(--primary));
+            background-size: 200% 100%;
+            animation: shimmer 3s linear infinite;
+        }
+
+        .video-wrapper {
+            position: relative;
+            padding-bottom: 56.25%;
+            background: #000;
+        }
+
+        .video-wrapper img {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        .video-overlay {
+            position: absolute;
+            top: 1rem;
+            left: 1rem;
+            right: 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        .status-badge {
+            padding: 0.5rem 1rem;
+            border-radius: 0.75rem;
+            font-size: 0.75rem;
+            font-weight: 700;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .status-badge.active {
+            background: rgba(46, 213, 115, 0.15);
+            color: var(--success);
+            box-shadow: 0 0 20px rgba(46, 213, 115, 0.3);
+        }
+
+        .status-badge.inactive {
+            background: rgba(113, 128, 150, 0.15);
+            color: var(--text-muted);
+        }
+
+        .pulse-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        /* Controls */
+        .controls-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1rem;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .card {
+            background: var(--bg-card);
+            border-radius: 1.5rem;
+            padding: 1.5rem;
+            border: 1px solid var(--border);
+            backdrop-filter: blur(10px);
+            transition: all 0.3s ease;
+        }
+
+        .card:hover {
+            border-color: rgba(0, 212, 255, 0.3);
+            box-shadow: 0 8px 32px rgba(0, 212, 255, 0.1);
+        }
+
+        .card-title {
+            font-size: 1.125rem;
+            font-weight: 700;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .metric-display {
+            text-align: center;
+            padding: 2rem 1rem;
+            background: linear-gradient(135deg, rgba(0, 212, 255, 0.05), rgba(46, 213, 115, 0.05));
+            border-radius: 1rem;
+            border: 1px solid var(--border);
+            margin-bottom: 1.5rem;
+        }
+
+        .metric-label {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+            margin-bottom: 0.5rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .metric-value {
+            font-size: 3rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--primary), var(--success));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            line-height: 1;
+        }
+
+        /* Alert Rows */
+        .alert-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 1rem;
+            background: var(--bg-elevated);
+            border-radius: 1rem;
+            border: 1px solid var(--border);
+            margin-bottom: 0.75rem;
+            transition: all 0.3s ease;
+        }
+
+        .alert-row.active {
+            background: linear-gradient(135deg, rgba(255, 71, 87, 0.1), rgba(255, 71, 87, 0.05));
+            border-color: var(--danger);
+            box-shadow: 0 0 30px var(--danger-glow);
+            animation: alertPulse 2s ease-in-out infinite;
+        }
+
+        .alert-row.inactive {
+            opacity: 0.5;
+        }
+
+        .alert-info {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .alert-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 0.75rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.25rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+        }
+
+        .alert-row.active .alert-icon {
+            background: var(--danger);
+            border-color: var(--danger);
+            animation: shake 0.5s ease-in-out;
+        }
+
+        .alert-details h4 {
+            font-size: 0.875rem;
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+
+        .alert-details p {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        .alert-count-section {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .count-display {
+            min-width: 50px;
+            text-align: center;
+            font-size: 1.25rem;
+            font-weight: 800;
+            color: var(--primary);
+        }
+
+        .btn-small {
+            padding: 0.5rem 1rem;
+            font-size: 0.75rem;
+            border-radius: 0.5rem;
+        }
+
+        /* Recent Files */
+        .recent-section {
+            animation: fadeIn 1s ease-out 0.4s both;
+        }
+
+        .recent-section h3 {
+            font-size: 1.25rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+        }
+
+        .file-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 1rem;
+        }
+
+        .file-item {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 1rem;
+            background: var(--bg-card);
+            border-radius: 1rem;
+            border: 1px solid var(--border);
+            text-decoration: none;
+            color: var(--text-primary);
+            transition: all 0.3s ease;
+        }
+
+        .file-item:hover {
+            border-color: var(--primary);
+            transform: translateX(4px);
+            box-shadow: 0 4px 20px var(--glow-primary);
+        }
+
+        .file-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 0.75rem;
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.25rem;
+        }
+
+        .file-name {
+            flex: 1;
+            font-size: 0.875rem;
+            font-weight: 500;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* Animations */
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes fadeSlideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        @keyframes shimmer {
+            0% {
+                background-position: -200% 0;
+            }
+
+            100% {
+                background-position: 200% 0;
+            }
+        }
+
+        @keyframes alertPulse {
+
+            0%,
+            100% {
+                box-shadow: 0 0 20px var(--danger-glow);
+            }
+
+            50% {
+                box-shadow: 0 0 40px var(--danger-glow);
+            }
+        }
+
+        @keyframes shake {
+
+            0%,
+            100% {
+                transform: translateX(0);
+            }
+
+            25% {
+                transform: translateX(-5px);
+            }
+
+            75% {
+                transform: translateX(5px);
+            }
+        }
+
+        /* Responsive */
+        @media (max-width: 1200px) {
+            .main-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 1rem;
+            }
+
+            .header h1 {
+                font-size: 1.5rem;
+            }
+
+            .controls-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .file-list {
+                grid-template-columns: 1fr;
+            }
+
+            .header-meta {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+        }
+    </style>
 </head>
+
 <body>
-  <div class="container">
-    <h1>Live Viewer</h1>
-    <div class="controls-row">
-      <a style="color:white;" class="btn" href="{{ url_for('index') }}">← Upload new</a>
-      <div class="file-info">File: <strong>{{ filename }}</strong></div>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <h1>Live Viewer</h1>
+            <div class="header-meta">
+                <div class="filename-badge">
+                    <span>📹</span>
+                    <span>Monitoring: <strong id="filenameDisplay">{{ filename }}</strong></span>
+                </div>
+                <a href="{{ url_for('index') }}" class="btn btn-outline">
+                    <span>← Back to Upload</span>
+                </a>
+            </div>
+        </header>
+
+        <!-- Main Grid -->
+        <div class="main-grid">
+            <!-- Video Section -->
+            <div class="video-section">
+                <div class="video-container">
+                    <div class="video-overlay">
+                        <div id="statusBadge" class="status-badge inactive">
+                            <div class="pulse-dot"></div>
+                            <span>Analysis Stopped</span>
+                        </div>
+                    </div>
+                    <div class="video-wrapper">
+                        <img id="mjpeg" src="{{ url_for('video_feed') }}?file={{ filename }}"
+                            alt="Live surveillance feed" />
+                    </div>
+                </div>
+
+                <!-- Controls -->
+                <div class="controls-grid">
+                    <button id="startBtn" class="btn btn-primary">
+                        <span>▶️ Start Analysis</span>
+                    </button>
+                    <button id="stopBtn" class="btn btn-secondary">
+                        <span>⏹️ Stop Analysis</span>
+                    </button>
+                </div>
+
+                <!-- <a href="{{ url_for('download_file', folder='uploads', filename=filename) }}" class="btn btn-outline"
+                    style="width: 100%;">
+                    <span>⬇️ Download Original Video</span>
+                </a> -->
+            </div>
+
+            <!-- Sidebar -->
+            <aside class="sidebar">
+                <!-- Current Count -->
+                <div class="card">
+                    <div class="card-title">
+                        <span>👥</span>
+                        <span>Live Detection</span>
+                    </div>
+                    <div class="metric-display">
+                        <div class="metric-label">People Detected</div>
+                        <div id="currentCount" class="metric-value">0</div>
+                    </div>
+                </div>
+
+                <!-- Intrusion Alerts -->
+                <div class="card">
+                    <div class="card-title">
+                        <span>⚠️</span>
+                        <span>Intrusion Alerts</span>
+                    </div>
+
+                    <!-- Pacing Alert -->
+                    <div id="pacingAlert" class="alert-row inactive">
+                        <div class="alert-info">
+                            <div class="alert-icon">🚶</div>
+                            <div class="alert-details">
+                                <h4>Suspicious Pacing</h4>
+                                <p>Repetitive movement detected</p>
+                            </div>
+                        </div>
+                        <div class="alert-count-section">
+                            <button id="showPacingBtn" class="btn btn-secondary btn-small">
+                                <span>Show</span>
+                            </button>
+                            <div id="pacingCount" class="count-display">—</div>
+                        </div>
+                    </div>
+
+                    <!-- Loitering Alert -->
+                    <div id="loiteringAlert" class="alert-row inactive">
+                        <div class="alert-info">
+                            <div class="alert-icon">⏱️</div>
+                            <div class="alert-details">
+                                <h4>Loitering Detected</h4>
+                                <p>Prolonged presence in area</p>
+                            </div>
+                        </div>
+                        <div class="alert-count-section">
+                            <button id="showLoiteringBtn" class="btn btn-secondary btn-small">
+                                <span>Show</span>
+                            </button>
+                            <div id="loiteringCount" class="count-display">—</div>
+                        </div>
+                    </div>
+
+                    <!-- Running Alert -->
+                    <div id="runningAlert" class="alert-row inactive">
+                        <div class="alert-info">
+                            <div class="alert-icon">🏃</div>
+                            <div class="alert-details">
+                                <h4>Sudden Running</h4>
+                                <p>Fast / sudden movement detected</p>
+                            </div>
+                        </div>
+                        <div class="alert-count-section">
+                            <button id="showRunningBtn" class="btn btn-secondary btn-small">
+                                <span>Show</span>
+                            </button>
+                            <div id="runningCount" class="count-display">—</div>
+                        </div>
+                    </div>
+
+
+                    <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 1rem;">
+                        💡 Click "Show" to reveal detection counts when alerts are active
+                    </p>
+                </div>
+            </aside>
+        </div>
+
+        <!-- Recent Files -->
+        <section class="recent-section">
+            <div class="card">
+                <h3>📁 Recent Uploads</h3>
+                <div class="file-list">
+                    {% for f in uploads %}
+                    <a href="{{ url_for('view_file', filename=f) }}" class="file-item">
+                        <div class="file-icon">🎬</div>
+                        <div class="file-name">{{ f }}</div>
+                    </a>
+                    {% endfor %}
+                </div>
+            </div>
+        </section>
     </div>
 
-    <div class="player-card" style="display:flex; gap:24px;">
-      <!-- LEFT: Video vertically centered -->
-      <div style="flex:1; display:flex; justify-content:center; align-items:center;">
-        <div class="video-box">
-          <img id="mjpeg" src="{{ url_for('video_feed') }}?file={{ filename }}" alt="Live stream" />
-        </div>
-      </div>
+    <script>
+        const filename = "{{ filename }}";
+        const startBtn = document.getElementById("startBtn");
+        const stopBtn = document.getElementById("stopBtn");
+        const statusBadge = document.getElementById("statusBadge");
+        const currentCountEl = document.getElementById("currentCount");
 
-      <!-- RIGHT: Controls + Metrics -->
-      <div style="width:320px; display:flex; flex-direction:column; gap:20px;">
+        const pacingAlert = document.getElementById("pacingAlert");
+        const loiteringAlert = document.getElementById("loiteringAlert");
+        const pacingCountEl = document.getElementById("pacingCount");
+        const loiteringCountEl = document.getElementById("loiteringCount");
+        const showPacingBtn = document.getElementById("showPacingBtn");
+        const showLoiteringBtn = document.getElementById("showLoiteringBtn");
 
-        <!-- Start/Stop Row -->
-        <div style="display:flex; gap:12px;">
-          <button id="startBtn" class="btn primary" style="flex:1;">Start</button>
-          <button id="stopBtn" class="btn secondary" style="flex:1;">Stop</button>
-        </div>
+        let lastStats = null;
 
-        <!-- Download Original -->
-        <a class="btn" href="{{ url_for('download_file', folder='uploads', filename=filename) }}">Download original</a>
+        const runningAlert = document.getElementById("runningAlert");
+        const runningCountEl = document.getElementById("runningCount");
+        const showRunningBtn = document.getElementById("showRunningBtn");
 
-
-        <!-- Metrics (future-proof stacked list) -->
-        <div class="metrics-box" style="background:#1d2126; padding:14px 16px; border-radius:10px; border:1px solid #1f2328;">
-
-          <!-- Metric Row: Current People -->
-          <div class="metric-row" style="display:flex; justify-content:space-between; margin-bottom:8px;">
-            <div class="metric-label" style="color:#9ca3af;">Current people detected:</div>
-            <div id="currentCount" class="metric-value" style="color:#0b84ff; font-weight:700;">—</div>
-          </div>
-
-          <!-- Future metrics can be added below easily -->
-           <div class="metric-row" style="display:flex; justify-content:space-between; margin-bottom:8px;">
-              <div class="metric-label" style="color:#9ca3af;">Suspicious pacing:</div>
-              <div id="pacingStatus" class="metric-value" style="color:#0b84ff; font-weight:700;">—</div>
-          </div>
-
-          <div class="metric-row" style="display:flex; justify-content:space-between; margin-bottom:8px;">
-            <div class="metric-label" style="color:#9ca3af;">Loitering detected:</div>
-            <div id="loiteringStatus" class="metric-value" style="color:#0b84ff; font-weight:700;">—</div>
-          </div>
-
-          <button id="toggleRunningBtn" class="btn secondary" style="width:100%;">
-              Enable Sudden Running Detection
-          </button>
-          <div class="metric-row" style="display:flex; justify-content:space-between; margin-bottom:8px;">
-              <div class="metric-label" style="color:#9ca3af;">Sudden running detected:</div>
-              <div id="runningStatus" class="metric-value" style="color:#0b84ff; font-weight:700;">—</div>
-          </div>
+        let runningEnabled = false;
+        let runningInterval = null;
 
 
-        </div>
-      </div>
-    </div>
+        // local UI state
+        let pacingEnabled = false;
+
+        let loiteringEnabled = false;
 
 
-    <section class="recent">
-      <h3>Other uploads</h3>
-      <ul>
-        {% for f in uploads %}
-          <li><a href="{{ url_for('view_file', filename=f) }}">{{ f }}</a></li>
-        {% endfor %}
-      </ul>
-    </section>
-  </div>
+        // --- NEW: Variables for continuous display intervals ---
+        let pacingInterval = null;
+        let loiteringInterval = null;
+        // ----------------------------------------------------
 
-  <script>
-    const filename = "{{ filename }}";
-    const startBtn = document.getElementById("startBtn");
-    const stopBtn = document.getElementById("stopBtn");
-    const currentCountEl = document.getElementById("currentCount");
-    const avgCountEl = document.getElementById("avgCount");
+        // Control functions
+        async function setControl(action) {
+            try {
+                const res = await fetch("/control", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ file: filename, action })
+                });
+                const data = await res.json();
 
-    const toggleRunningBtn = document.getElementById("toggleRunningBtn");
-    let runningEnabled = false;
+                if (data.ok) {
+                    updateControlButtons(data.running);
+                }
+            } catch (error) {
+                console.error("Control error:", error);
+            }
+        }
 
-    toggleRunningBtn.onclick = async () => {
-        runningEnabled = !runningEnabled;
+        function updateControlButtons(isRunning) {
+            startBtn.disabled = isRunning;
+            stopBtn.disabled = !isRunning;
 
-        const res = await fetch("/toggle_running", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ file: filename, enabled: runningEnabled })
+            if (isRunning) {
+                statusBadge.classList.remove("inactive");
+                statusBadge.classList.add("active");
+                statusBadge.querySelector("span").textContent = "Analysis Active";
+            } else {
+                statusBadge.classList.remove("active");
+                statusBadge.classList.add("inactive");
+                statusBadge.querySelector("span").textContent = "Analysis Stopped";
+            }
+        }
+
+        // Stats polling
+        async function pollStats() {
+            try {
+                const res = await fetch(`/stats?file=${encodeURIComponent(filename)}`);
+                const data = await res.json();
+
+                if (data && data.ok) {
+                    lastStats = data;
+
+                    // ---- pacing toggle sync ----
+                    if (typeof data.pacing_enabled !== "undefined") {
+                        pacingEnabled = !!data.pacing_enabled;
+
+                        // Toggle button text
+                        showPacingBtn.innerHTML = pacingEnabled ? "OFF" : "Show";
+
+                        // Toggle button styling
+                        if (pacingEnabled) {
+                            showPacingBtn.classList.remove("btn-secondary");
+                            showPacingBtn.classList.add("btn-primary");
+                        } else {
+                            showPacingBtn.classList.add("btn-secondary");
+                            showPacingBtn.classList.remove("btn-primary");
+                        }
+
+                        // ---- pacing status indicator (the "—" box) ----
+                        if (!pacingEnabled) {
+                            // pacing OFF → always show "—"
+                            pacingCount.textContent = "—";
+                        } else {
+                            // pacing ON → show Yes/No depending on detection
+                            pacingCount.textContent = data.suspicious_pacing ? "Yes" : "No";
+                        }
+                    }
+
+                    // ---- loitering toggle sync ----
+                    if (typeof data.loitering_enabled !== "undefined") {
+                        loiteringEnabled = !!data.loitering_enabled;
+
+                        showLoiteringBtn.innerHTML = loiteringEnabled ? "OFF" : "Show";
+
+                        if (loiteringEnabled) {
+                            showLoiteringBtn.classList.remove("btn-secondary");
+                            showLoiteringBtn.classList.add("btn-primary");
+                        } else {
+                            showLoiteringBtn.classList.add("btn-secondary");
+                            showLoiteringBtn.classList.remove("btn-primary");
+                        }
+
+                        // status display
+                        if (!loiteringEnabled) {
+                            loiteringCountEl.textContent = "—";
+                        } else {
+                            loiteringCountEl.textContent = data.loitering_detected ? "Yes" : "No";
+                        }
+                    }
+
+                    // ---- running toggle sync ----
+                    if (typeof data.running_enabled !== "undefined") {
+                        runningEnabled = !!data.running_enabled;
+
+                        // Toggle button text
+                        showRunningBtn.innerHTML = runningEnabled ? "OFF" : "Show";
+
+                        // Toggle button styling
+                        if (runningEnabled) {
+                            showRunningBtn.classList.remove("btn-secondary");
+                            showRunningBtn.classList.add("btn-primary");
+                        } else {
+                            showRunningBtn.classList.add("btn-secondary");
+                            showRunningBtn.classList.remove("btn-primary");
+                        }
+
+                        // status display
+                        if (!runningEnabled) {
+                            runningCountEl.textContent = "—";
+                        } else {
+                            // If enabled show Yes/No detection (stats returns running_detected)
+                            runningCountEl.textContent = data.running_detected ? "Yes" : "No";
+                        }
+                    }
+
+
+
+                    // update rest of UI normally
+                    updateUI(data);
+                }
+            } catch (error) {
+                // ignore transient polling failures
+            } finally {
+                setTimeout(pollStats, 600);
+            }
+        }
+
+
+        function updateUI(data) {
+            // Update current count
+            currentCountEl.textContent = data.current_count || 0;
+
+            // ---- Pacing Alert Row Activation ----
+            if (data.suspicious_pacing && pacingEnabled) {
+                pacingAlert.classList.remove("inactive");
+                pacingAlert.classList.add("active");
+            } else {
+                pacingAlert.classList.add("inactive");
+                pacingAlert.classList.remove("active");
+            }
+
+            // ---- Loitering Alert Row Activation ----
+            if (data.loitering_detected && loiteringEnabled) {
+                loiteringAlert.classList.remove("inactive");
+                loiteringAlert.classList.add("active");
+            } else {
+                loiteringAlert.classList.add("inactive");
+                loiteringAlert.classList.remove("active");
+            }
+
+
+            // (Running, Face-cover etc. go here if you add them later)
+            // ---- Running Alert Row Activation ----
+            if (data.running_detected && runningEnabled) {
+                runningAlert.classList.remove("inactive");
+                runningAlert.classList.add("active");
+            } else {
+                runningAlert.classList.add("inactive");
+                runningAlert.classList.remove("active");
+            }
+
+        }
+
+
+        // --- MODIFIED: Continuous Show count functions ---
+        // Function to update the Pacing Count display
+        function updatePacingCount() {
+            if (lastStats) {
+                pacingCountEl.textContent = lastStats.pacing_count || 0;
+            }
+        }
+
+        // Function to update the Loitering Count display
+        function updateLoiteringCount() {
+            if (lastStats) {
+                loiteringCountEl.textContent = lastStats.loitering_count || 0;
+            }
+        }
+
+        // Toggle function for Pacing
+        // function togglePacingCountDisplay() {
+        //     const spanEl = showPacingBtn.querySelector("span");
+        //     if (pacingInterval) {
+        //         // Currently ON, turn OFF
+        //         clearInterval(pacingInterval);
+        //         pacingInterval = null;
+        //         spanEl.textContent = "Show";
+        //         pacingCountEl.textContent = "—"; // Optionally reset display
+        //         showPacingBtn.classList.remove('btn-danger'); // Optional styling change
+        //         showPacingBtn.classList.add('btn-secondary');
+        //     } else if (pacingAlert.classList.contains("active")) {
+        //         // Currently OFF, turn ON (only if alert is active)
+        //         // Display the count immediately
+        //         updatePacingCount();
+        //         // Start continuous update, synchronized with pollStats frequency (600ms)
+        //         pacingInterval = setInterval(updatePacingCount, 600);
+        //         spanEl.textContent = "OFF";
+        //         showPacingBtn.classList.remove('btn-secondary');
+        //         showPacingBtn.classList.add('btn-danger'); // Use danger style for OFF state
+        //     }
+        // }
+
+        // Toggle function for Loitering
+        // function toggleLoiteringCountDisplay() {
+        //     const spanEl = showLoiteringBtn.querySelector("span");
+        //     if (loiteringInterval) {
+        //         // Currently ON, turn OFF
+        //         clearInterval(loiteringInterval);
+        //         loiteringInterval = null;
+        //         spanEl.textContent = "Show";
+        //         loiteringCountEl.textContent = "—"; // Optionally reset display
+        //         showLoiteringBtn.classList.remove('btn-danger'); // Optional styling change
+        //         showLoiteringBtn.classList.add('btn-secondary');
+        //     } else if (loiteringAlert.classList.contains("active")) {
+        //         // Currently OFF, turn ON (only if alert is active)
+        //         // Display the count immediately
+        //         updateLoiteringCount();
+        //         // Start continuous update, synchronized with pollStats frequency (600ms)
+        //         loiteringInterval = setInterval(updateLoiteringCount, 600);
+        //         spanEl.textContent = "OFF";
+        //         showLoiteringBtn.classList.remove('btn-secondary');
+        //         showLoiteringBtn.classList.add('btn-danger'); // Use danger style for OFF state
+        //     }
+        // }
+        // ------------------------------------------------------------------
+
+        // Event listeners
+        startBtn.addEventListener("click", () => setControl("start"));
+        stopBtn.addEventListener("click", () => setControl("stop"));
+
+        // --- MODIFIED: Event listeners to use toggle functions ---
+        // showPacingBtn.addEventListener("click", togglePacingCountDisplay);
+
+        // Use the existing button as an ON/OFF toggle that calls the backend
+        showPacingBtn.addEventListener("click", async () => {
+          // flip local intent immediately (optimistic UI)
+          const newState = !pacingEnabled;
+
+          try {
+            const res = await fetch("/toggle_pacing", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ file: filename, enabled: newState })
+            });
+
+            const j = await res.json();
+            if (!j.ok) {
+              console.warn("toggle_pacing failed", j);
+              return;
+            }
+
+            // update local state from successful response
+            pacingEnabled = Boolean(newState);
+            // update button label + classes consistently with your design
+            showPacingBtn.querySelector("span")?.remove(); // remove inner span if present to avoid duplicates
+            showPacingBtn.innerHTML = pacingEnabled ? "OFF" : "Show";
+
+            // optional visual style changes (assumes btn-primary / btn-secondary classes exist)
+            if (pacingEnabled) {
+              showPacingBtn.classList.remove("btn-secondary");
+              showPacingBtn.classList.add("btn-primary");
+            } else {
+              showPacingBtn.classList.add("btn-secondary");
+              showPacingBtn.classList.remove("btn-primary");
+            }
+
+          } catch (err) {
+            console.error("Error toggling pacing:", err);
+          }
         });
 
-        const j = await res.json();
-        if (j.ok) {
-            toggleRunningBtn.textContent = runningEnabled
-                ? "Disable Sudden Running Detection"
-                : "Enable Sudden Running Detection";
-        }
-    };
+        showLoiteringBtn.addEventListener("click", async () => {
+            const newState = !loiteringEnabled;
 
-    async function setControl(action) {
-      try {
-        const res = await fetch("/control", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ file: filename, action })
+            try {
+                const res = await fetch("/toggle_loitering", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ file: filename, enabled: newState })
+                });
+
+                const j = await res.json();
+                if (!j.ok) return;
+
+                loiteringEnabled = newState;
+
+                showLoiteringBtn.innerHTML = loiteringEnabled ? "OFF" : "Show";
+
+                if (loiteringEnabled) {
+                    showLoiteringBtn.classList.remove("btn-secondary");
+                    showLoiteringBtn.classList.add("btn-primary");
+                } else {
+                    showLoiteringBtn.classList.add("btn-secondary");
+                    showLoiteringBtn.classList.remove("btn-primary");
+                }
+
+            } catch (err) {
+                console.error("Error toggling loitering:", err);
+            }
         });
-        const j = await res.json();
-        if (!j.ok) console.warn("control failed", j);
-        else {
-          startBtn.disabled = j.running;
-          stopBtn.disabled = !j.running;
-        }
-      } catch (e) {
-        console.error(e);
-      }
-    }
 
-    // Poll stats endpoint every 600ms
-    async function pollStats() {
-      try {
-        const res = await fetch(`/stats?file=${encodeURIComponent(filename)}`);
-        const j = await res.json();
-        if (j && j.ok) {
-          currentCountEl.textContent = j.current_count;
-          document.getElementById("runningStatus").textContent =
-            j.running_detected ? "Yes" : "No";
-          document.getElementById("pacingStatus").textContent = j.suspicious_pacing ? "Yes" : "No";
-          document.getElementById("loiteringStatus").textContent =
-            j.loitering_detected ? "Yes" : "No";
-        }
-      } catch (e) {
-        // ignore transient errors
-        // console.error("stats error", e);
-      } finally {
-        setTimeout(pollStats, 600);
-      }
-    }
+        showRunningBtn.addEventListener("click", async () => {
+          const newState = !runningEnabled;
 
-    // initial: Stop disabled (we don't auto-start), enable both
-    startBtn.onclick = () => setControl("start");
-    stopBtn.onclick = () => setControl("stop");
+          try {
+            const res = await fetch("/toggle_running", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ file: filename, enabled: newState })
+            });
+            const j = await res.json();
+            if (!j.ok) {
+              console.warn("toggle_running failed", j);
+              return;
+            }
+            runningEnabled = Boolean(newState);
+            showRunningBtn.innerHTML = runningEnabled ? "OFF" : "Show";
 
-    // start polling as soon as page loads
-    window.addEventListener('load', () => {
-      pollStats();
-    });
-  </script>
+            if (runningEnabled) {
+              showRunningBtn.classList.remove("btn-secondary");
+              showRunningBtn.classList.add("btn-primary");
+            } else {
+              showRunningBtn.classList.add("btn-secondary");
+              showRunningBtn.classList.remove("btn-primary");
+            }
+          } catch (err) {
+            console.error("Error toggling running:", err);
+          }
+        });
 
-  <style>
-  .counts-row { display:flex; gap:20px; margin-top:12px; }
-  .count-item { background:#1d2126; padding:12px 16px; border-radius:10px; min-width:180px; text-align:center; border:1px solid #1f2328; }
-  .count-label { font-size:13px; color:#9ca3af; margin-bottom:6px; }
-  .count-value { font-size:22px; font-weight:700; color:#0b84ff; }
-</style>
 
+
+        // showLoiteringBtn.addEventListener("click", toggleLoiteringCountDisplay);
+        // ---------------------------------------------------------
+
+        // Initialize
+        window.addEventListener("load", () => {
+            pollStats();
+        });
+    </script>
 </body>
+
 </html>

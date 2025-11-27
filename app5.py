@@ -61,6 +61,15 @@ def load_model(weights=MODEL_WEIGHTS):
             print(f"[MODEL] Loaded. half precision on GPU? {USE_HALF}")
     return MODEL
 
+FACE_MODEL = None
+def load_face_model():
+    global FACE_MODEL
+    if FACE_MODEL is None:
+        print("[FACE] Loading YOLOv8n-Face model...")
+        FACE_MODEL = YOLO("yolov8n-face-lindevs.pt")
+    return FACE_MODEL
+
+
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXT
 
@@ -70,15 +79,24 @@ def ensure_control_entry(filename):
             controls[filename] = {
                 "running": False,
                 "lock": Lock(),
+
                 "last_frame": None,
                 "last_count": 0,
                 "counts_sum": 0,
                 "counts_frames": 0,
-                "tracks": {},          # NEW: per-ID tracks
-                "running_enabled": False      # NEW FLAG
-            }
 
+                "tracks": {},
+
+                "running_enabled": False,
+                "pacing_enabled": False,
+                "face_cover_enabled": False,
+
+                # NEW
+                "loitering_enabled": False
+            }
     return controls[filename]
+
+
 
 def match_tracks(tracks, detections, dist_thresh=50):
     """
@@ -197,13 +215,50 @@ def check_loitering(track_data, window_seconds=15, movement_threshold=40):
     track_data["is_loitering"] = max_movement < movement_threshold
 
 
+def check_running(track_data, speed_threshold=200.0, window_seconds=0.6):
+    """
+    Mark track_data['is_running'] True if recent instantaneous speed
+    (pixels / second) exceeds speed_threshold.
+
+    - track_data["history"] contains tuples (ts, cx, cy).
+    - We look at the last two valid samples within window_seconds and compute speed.
+    - speed_threshold default is conservative; tune to your resolution/fps.
+    """
+    history = track_data.get("history", [])
+    if len(history) < 2:
+        track_data["is_running"] = False
+        return
+
+    # consider only recent samples
+    cutoff = time.time() - max(window_seconds, 1.0)  # make sure we have a short lookback
+    recent = [h for h in history if h[0] >= cutoff]
+
+    if len(recent) < 2:
+        track_data["is_running"] = False
+        return
+
+    # find two most recent samples with different timestamps
+    a = recent[-2]
+    b = recent[-1]
+    dt = b[0] - a[0]
+    if dt <= 0:
+        track_data["is_running"] = False
+        return
+
+    dx = b[1] - a[1]
+    dy = b[2] - a[2]
+    dist = (dx * dx + dy * dy) ** 0.5
+
+    speed = dist / dt  # pixels per second
+
+    # set running flag
+    track_data["is_running"] = speed >= speed_threshold
+    # also store last_speed for debugging/visualization if helpful
+    track_data["last_speed"] = speed
+
+
 
 def mjpeg_generator(video_path, filename):
-    """
-    Generator that yields multipart JPEG frames for MJPEG streaming.
-    It updates controls[filename] stats (last_count, counts_sum, counts_frames).
-    The displayed frames do NOT include the 'People: N' overlay.
-    """
     model = load_model()
     ctrl = ensure_control_entry(filename)
 
@@ -217,7 +272,7 @@ def mjpeg_generator(video_path, filename):
     fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
     print(f"[STREAM] open {video_path} size=({orig_w}x{orig_h}) fps={fps}")
 
-    # compute detection scale
+    # detection scaling
     if orig_w > DETECT_WIDTH:
         scale = DETECT_WIDTH / orig_w
         detect_w = int(orig_w * scale)
@@ -226,9 +281,6 @@ def mjpeg_generator(video_path, filename):
         scale = 1.0
         detect_w = orig_w
         detect_h = orig_h
-
-    device_for_predict = MODEL_DEVICE
-    use_half = USE_HALF
 
     frame_idx = 0
     last_boxes = []
@@ -249,19 +301,16 @@ def mjpeg_generator(video_path, filename):
                 do_detect = (frame_idx % FRAME_SKIP == 0)
 
                 if do_detect:
-                    # resize for detection
-                    if scale != 1.0:
-                        small = cv2.resize(frame, (detect_w, detect_h))
-                    else:
-                        small = frame
+                    # detection frame
+                    small = cv2.resize(frame, (detect_w, detect_h)) if scale != 1.0 else frame
 
                     imgsz = int((detect_w + 31) // 32) * 32
                     results = model.predict(
                         source=small,
                         imgsz=imgsz,
                         conf=CONF_THRESHOLD,
-                        device=device_for_predict,
-                        half=use_half,
+                        device=MODEL_DEVICE,
+                        half=USE_HALF,
                         verbose=False,
                     )
 
@@ -274,10 +323,7 @@ def mjpeg_generator(video_path, filename):
                         conf_score = float(b[4]) if b.shape[0] > 4 else 0.0
 
                         if scale != 1.0:
-                            x1 = int(x1 / scale)
-                            y1 = int(y1 / scale)
-                            x2 = int(x2 / scale)
-                            y2 = int(y2 / scale)
+                            x1, y1, x2, y2 = int(x1 / scale), int(y1 / scale), int(x2 / scale), int(y2 / scale)
                         else:
                             x1, y1, x2, y2 = map(int, (x1, y1, x2, y2))
 
@@ -285,122 +331,152 @@ def mjpeg_generator(video_path, filename):
 
                     last_count = len(last_boxes)
 
-                    # ----------------------------------------------------
-                    # ---- TRACKING + PACING + store last_box per track ----
-                    # ----------------------------------------------------
+                    # ----------------------------------------
+                    # TRACKING + PACING + LOITERING
+                    # ----------------------------------------
                     assigned = match_tracks(ctrl["tracks"], last_boxes)
                     now = time.time()
 
-                    # Reset a flag to mark which tracks got updated this frame
                     updated_track_ids = set()
 
                     for idx, (tid, cx) in enumerate(assigned):
                         t = ctrl["tracks"][tid]
-                        # get corresponding detection box to compute y-center
-                        # NOTE: assigned order matches last_boxes order (centroid sequence)
                         (x1, y1, x2, y2, _) = last_boxes[idx]
                         cy = (y1 + y2) / 2
 
-                        # store (timestamp, x-center, y-center)
                         t["history"].append((now, cx, cy))
+                        t["last_box"] = (x1, y1, x2, y2)
 
-                        # store last box for overlay drawing
-                        t["last_box"] = (int(x1), int(y1), int(x2), int(y2))
+                        # ---- PACING, LOITERING, RUNNING (TOGGLES) ----
+                        # Suspicious pacing only if enabled
+                        if ctrl.get("pacing_enabled", False):
+                            check_pacing(t)
+                        else:
+                            t["is_pacing"] = False  # ensure clean state when off
 
-                        # run pacing
-                        check_pacing(t)
+                        # --- LOITERING (toggle controlled) ---
+                        if ctrl.get("loitering_enabled", False):
+                            check_loitering(t)
+                        else:
+                            t["is_loitering"] = False
 
-                        # run loitering
-                        check_loitering(t)
 
-                        # Only detect running if enabled
+                        # Sudden running only if enabled
                         if ctrl.get("running_enabled", False):
                             check_running(t)
+                        else:
+                            t["is_running"] = False
+
+
+                        # ----------------------------
+                        # STEP 3 — YOLOv8-Face
+                        # ----------------------------
+                        # ---- FACE COVER DETECTION (FULLY FIXED) ----
+                        if ctrl.get("face_cover_enabled", False):
+                            try:
+                                face_model = load_face_model()
+
+                                # expand head region to 70%
+                                hx1, hy1 = x1, y1
+                                hx2 = x2
+                                hy2 = y1 + int((y2 - y1) * 0.70)
+
+                                head_crop = frame[hy1:hy2, hx1:hx2]
+
+                                if head_crop.size == 0:
+                                    t["is_face_covered"] = False
+                                else:
+                                    # upscale small faces
+                                    head_up = cv2.resize(head_crop, None, fx=2.0, fy=2.0)
+
+                                    # very low threshold for partially-visible faces
+                                    face_res = face_model.predict(head_up, conf=0.05, verbose=False)
+
+                                    if len(face_res) > 0 and len(face_res[0].boxes) > 0:
+                                        t["is_face_covered"] = False      # face visible
+                                    else:
+                                        t["is_face_covered"] = True       # face hidden / covered
+
+                            except Exception as e:
+                                print("[FACE] error:", e)
+                                t["is_face_covered"] = False
 
                         updated_track_ids.add(tid)
 
-                    # Optionally: prune tracks that haven't been updated for a while
-                    # (keeps ctrl["tracks"] compact). We'll keep them but allow last_box
-                    # to persist briefly so overlays don't flicker. If you prefer to remove
-                    # stale tracks, uncomment below:
-                    # stale_cutoff = time.time() - 8.0
-                    # for tid, tdata in list(ctrl["tracks"].items()):
-                    #     if not tdata.get("history") or tdata["history"][-1][0] < stale_cutoff:
-                    #         del ctrl["tracks"][tid]
-
-                # draw boxes
+                # draw bounding boxes
                 disp = frame.copy()
-                if last_boxes:
-                    for (x1, y1, x2, y2, conf_score) in last_boxes:
-                        cv2.rectangle(disp, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                        label = f"person {conf_score:.2f}"
-                        cv2.putText(disp, label, (x1, max(15, y1 - 6)),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.45,
-                                    (255, 255, 255), 1, cv2.LINE_AA)
-                
-                # -------------------
-                # Draw per-track alert overlays (priority: loitering(red) > pacing(yellow))
-                # -------------------
-                # We snapshot tracks under lock to avoid races
+                for (x1, y1, x2, y2, conf_score) in last_boxes:
+                    cv2.rectangle(disp, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    cv2.putText(disp, f"person {conf_score:.2f}",
+                                (x1, max(15, y1 - 6)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                                (255, 255, 255), 1)
+
+                # ----------------------------------------
+                # STEP 4 — OVERLAY PRIORITY
+                # loiter(red) > pacing(yellow) > face-covered(purple)
+                # ----------------------------------------
                 with ctrl["lock"]:
-                    track_snapshot = {tid: dict(tdata) for tid, tdata in ctrl.get("tracks", {}).items()}
+                    track_snapshot = {tid: dict(tdata) for tid, tdata in ctrl["tracks"].items()}
 
                 for tid, tdata in track_snapshot.items():
                     last_box = tdata.get("last_box")
                     if not last_box:
                         continue
+
                     x1, y1, x2, y2 = last_box
                     is_loiter = tdata.get("is_loitering", False)
                     is_pace = tdata.get("is_pacing", False)
+                    is_face_cov = tdata.get("is_face_covered", False)
 
-                    # decide color and thickness
+                    # priority ordering
                     if is_loiter:
-                        color = (0, 0, 255)   # red (BGR)
-                        thickness = 4
+                        color = (0, 0, 255)     # red
                         label = f"LOITERING #{tid}"
+                        thickness = 4
+
                     elif is_pace:
-                        color = (0, 215, 255) # yellow-ish (BGR)
-                        thickness = 3
+                        color = (0, 215, 255)   # yellow
                         label = f"PACING #{tid}"
+                        thickness = 3
+
+                    elif is_face_cov:
+                        color = (180, 0, 200)   # purple
+                        label = f"FACE COVERED #{tid}"
+                        thickness = 3
+
                     else:
-                        continue  # not flagged -> skip
+                        continue
 
-                    # draw thicker colored rectangle and semi-transparent fill
                     cv2.rectangle(disp, (x1, y1), (x2, y2), color, thickness)
-                    # draw filled translucent rectangle behind label for readability
                     (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-                    rect_x2 = x1 + tw + 10
-                    rect_y2 = y1 - 6
-                    rect_y1 = rect_y2 - (th + 8)
-                    # ensure within image bounds
-                    rect_y1 = max(rect_y1, 0)
-                    cv2.rectangle(disp, (x1, rect_y1), (rect_x2, rect_y2), color, -1)
-                    cv2.putText(disp, label, (x1 + 4, rect_y2 - 4),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.45,
-                                (255, 255, 255), 1, cv2.LINE_AA)
 
-                # resize for display
+                    rect_y2 = y1 - 6
+                    rect_y1 = rect_y2 - (th + 10)
+                    cv2.rectangle(disp, (x1, rect_y1), (x1 + tw + 10, rect_y2), color, -1)
+                    cv2.putText(disp, label, (x1 + 4, rect_y2 - 3),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                                (255, 255, 255), 1)
+
+                # resize
                 if OUTPUT_DISPLAY_WIDTH and disp.shape[1] > OUTPUT_DISPLAY_WIDTH:
                     scale_out = OUTPUT_DISPLAY_WIDTH / disp.shape[1]
-                    new_w = OUTPUT_DISPLAY_WIDTH
-                    new_h = int(disp.shape[0] * scale_out)
-                    disp = cv2.resize(disp, (new_w, new_h))
+                    disp = cv2.resize(disp, (OUTPUT_DISPLAY_WIDTH, int(disp.shape[0] * scale_out)))
 
-                encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
-                success, jpeg = cv2.imencode('.jpg', disp, encode_params)
+                # encode jpeg
+                success, jpeg = cv2.imencode('.jpg', disp, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
                 if not success:
                     continue
-
                 frame_bytes = jpeg.tobytes()
 
+                # update frame + stats
                 with ctrl["lock"]:
                     ctrl["last_frame"] = frame_bytes
                     ctrl["last_count"] = last_count
                     ctrl["counts_sum"] += last_count
                     ctrl["counts_frames"] += 1
 
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' +
+                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' +
                        frame_bytes + b'\r\n')
 
             else:
@@ -409,21 +485,16 @@ def mjpeg_generator(video_path, filename):
                     lf = ctrl.get("last_frame")
 
                 if lf is not None:
-                    yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n' +
+                    yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' +
                            lf + b'\r\n')
                 else:
                     placeholder = 255 * np.ones((240, 320, 3), dtype=np.uint8)
-                    cv2.putText(
-                        placeholder, "PAUSED",
-                        (40, 120), cv2.FONT_HERSHEY_SIMPLEX,
-                        1.5, (0, 0, 255), 3
-                    )
+                    cv2.putText(placeholder, "PAUSED", (40, 120),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 3)
                     success, jpeg = cv2.imencode('.jpg', placeholder)
                     if success:
                         pb = jpeg.tobytes()
-                        yield (b'--frame\r\n'
-                               b'Content-Type: image/jpeg\r\n\r\n' +
+                        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' +
                                pb + b'\r\n')
 
                 time.sleep(0.1)
@@ -502,6 +573,52 @@ def control():
     return jsonify({"ok": True, "running": ctrl["running"]})
 
 
+@app.route("/toggle_loitering", methods=["POST"])
+def toggle_loitering():
+    data = request.get_json(force=True)
+    filename = data.get("file")
+    enabled = data.get("enabled")
+
+    if not filename:
+        return jsonify({"ok": False, "error": "missing filename"}), 400
+
+    safe = os.path.basename(filename)
+    ctrl = ensure_control_entry(safe)
+
+    with ctrl["lock"]:
+        ctrl["loitering_enabled"] = bool(enabled)
+
+    print(f"[LOITERING] loitering_enabled for {safe} -> {bool(enabled)}")
+
+    return jsonify({"ok": True})
+
+
+
+@app.route("/toggle_pacing", methods=["POST"])
+def toggle_pacing():
+    """
+    Enables or disables suspicious pacing detection for a given file.
+    Body: { "file": "<filename>", "enabled": true/false }
+    Returns: { "ok": true }
+    """
+    data = request.get_json(force=True)
+    filename = data.get("file")
+    enabled = data.get("enabled")
+
+    if not filename:
+        return jsonify({"ok": False, "error": "missing filename"}), 400
+
+    safe = os.path.basename(filename)
+    ctrl = ensure_control_entry(safe)
+
+    with ctrl["lock"]:
+        ctrl["pacing_enabled"] = bool(enabled)
+
+    print(f"[PACING] pacing_enabled for {safe} -> {bool(enabled)}")
+
+    return jsonify({"ok": True})
+
+
 @app.route("/toggle_running", methods=["POST"])
 def toggle_running():
     data = request.get_json(force=True)
@@ -525,16 +642,6 @@ def toggle_running():
 
 @app.route("/stats")
 def stats():
-    """
-    Query params: ?file=<filename>
-    Returns JSON with:
-      current_count
-      avg_people
-      suspicious_pacing
-      loitering_detected
-      running_detected
-      running_enabled (toggle state)
-    """
     filename = request.args.get("file")
     if not filename:
         return jsonify({"ok": False, "error": "missing file param"}), 400
@@ -543,42 +650,62 @@ def stats():
     ctrl = ensure_control_entry(safe)
 
     with ctrl["lock"]:
-        # basic counts
+        # Basic people counts
         current = int(ctrl.get("last_count", 0))
         sumc = int(ctrl.get("counts_sum", 0))
         frames = int(ctrl.get("counts_frames", 0))
 
-        # feature detections
-        pacing_detected = any(
-            t.get("is_pacing", False)
-            for t in ctrl.get("tracks", {}).values()
-        )
+        # --- DETECTION STATES ---
+        pacing_detected = any(t.get("is_pacing", False) for t in ctrl["tracks"].values())
+        loitering_detected = any(t.get("is_loitering", False) for t in ctrl["tracks"].values())
+        running_detected = any(t.get("is_running", False) for t in ctrl["tracks"].values())
 
-        loitering_detected = any(
-            t.get("is_loitering", False)
-            for t in ctrl.get("tracks", {}).values()
-        )
-
-        running_detected = any(
-            t.get("is_running", False)
-            for t in ctrl.get("tracks", {}).values()
-        )
-
-        # NEW — whether running detection is enabled by user
+        # --- TOGGLE STATES ---
+        pacing_enabled = bool(ctrl.get("pacing_enabled", False))
+        loitering_enabled = bool(ctrl.get("loitering_enabled", False))
         running_enabled = bool(ctrl.get("running_enabled", False))
+        face_cover_enabled = bool(ctrl.get("face_cover_enabled", False))
 
-    avg = (sumc / frames) if frames > 0 else 0.0
+        # --- PER-PERSON FACE COVER LIST ---
+        face_status_list = [
+            {"id": tid, "covered": bool(t.get("is_face_covered", False))}
+            for tid, t in ctrl["tracks"].items()
+        ]
+
+        # --- OPTIONAL COUNTS ---
+        pacing_count = sum(1 for t in ctrl["tracks"].values() if t.get("is_pacing", False))
+        loiter_count = sum(1 for t in ctrl["tracks"].values() if t.get("is_loitering", False))
+        running_count = sum(1 for t in ctrl["tracks"].values() if t.get("is_running", False))
+
+    # Average people in the scene
+    avg_people = (sumc / frames) if frames > 0 else 0.0
 
     return jsonify({
         "ok": True,
-        "current_count": current,
-        "avg_people": round(avg, 2),
-        "suspicious_pacing": pacing_detected,
-        "loitering_detected": loitering_detected,
-        "running_detected": running_detected,
-        "running_enabled": running_enabled
-    })
 
+        # People counts
+        "current_count": current,
+        "avg_people": round(avg_people, 2),
+
+        # --- Suspicious pacing ---
+        "suspicious_pacing": pacing_detected,
+        "pacing_enabled": pacing_enabled,
+        "pacing_count": pacing_count,
+
+        # --- Loitering ---
+        "loitering_detected": loitering_detected,
+        "loitering_enabled": loitering_enabled,
+        "loitering_count": loiter_count,
+
+        # --- Running ---
+        "running_detected": running_detected,
+        "running_enabled": running_enabled,
+        "running_count": running_count,
+
+        # --- Face Cover Detection ---
+        "face_cover_enabled": face_cover_enabled,
+        "face_covering_list": face_status_list
+    })
 
 
 
@@ -599,3 +726,19 @@ if __name__ == "__main__":
         print("[WARN] model preload error:", e)
     # threaded mode allows concurrent streams for dev (not for high scale)
     app.run(host="0.0.0.0", port=5000, threaded=True)
+
+
+@app.route("/toggle_face_cover", methods=["POST"])
+def toggle_face_cover():
+    data = request.get_json(force=True)
+    filename = data.get("file")
+    enabled = data.get("enabled")
+
+    safe = os.path.basename(filename)
+    ctrl = ensure_control_entry(safe)
+
+    with ctrl["lock"]:
+        ctrl["face_cover_enabled"] = bool(enabled)
+
+    return jsonify({"ok": True})
+
