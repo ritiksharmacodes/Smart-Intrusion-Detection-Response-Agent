@@ -1,117 +1,147 @@
-The **Smart Intrusion Detection & Response Agent** is an enterprise-grade AI surveillance system designed to enhance physical security across public and private infrastructures such as malls, airports, university campuses, office buildings, and industrial facilities.
+# 🚨 Smart-Intrusion-Detection-Response-Agent  
+### Real-Time AI-Powered Behavior Analysis & Intrusion Detection System
 
-The platform delivers **real-time monitoring**, **behavioral threat scoring**, **suspect identification**, **crowd analytics**, and a powerful **AI-driven query interface** that enables security operators to interact with surveillance data using natural language.
-
-## **✨ Key Capabilities**
-
-### **1. Real-Time Situational Awareness**
-
-* Multi-person detection at high FPS
-* Identity tracking across frames
-* Automatic counting of individuals in the scene
-* Restricted-zone entry detection
-
-### **2. AI-Based Threat Level Scoring**
-
-Behavioral analytics powered by computer vision:
-
-* Loitering analysis
-* Fast or abnormal movement
-* Pacing and repetitive motion
-* Face covering or camera avoidance
-* Head movement indicating scanning behavior
-* Weapon detection (guns/knives)
-* Unauthorized access
-
-All behaviors contribute to a cumulative **Threat Score**, enabling proactive security decision-making.
-
-### **3. Suspect Identification Engine**
-
-* Face embedding extraction (FaceNet / InsightFace)
-* In-memory high-speed suspect database
-* Millisecond-level identity matching
-* Continuous tracking of flagged individuals
-
-### **4. Crowd Heatmap & Congestion Intelligence**
-
-* Grid-based density analysis
-* Real-time dynamic heatmap overlay
-* Congestion and crowding alerts
-* Early detection of stampede-prone situations
-
-### **5. AI Chat Interface for Security Operations**
-
-Operators interact naturally with the system:
-
-* “Where is the suspect now?”
-* “Show me the last suspicious event.”
-* “How many people are in Camera 4?”
-* “Summarize today’s security activity.”
-
-Powered by LLMs and a surveillance-aware query engine.
-
-### **6. Automated Alerting & Deterrence**
-
-* Audible alarms & sirens
-* Visual warnings (UI overlays + flashing indicators)
-* SMS/WhatsApp notifications
-* Timeline-based event logs
+A high-performance, real-time AI surveillance system designed to detect **loitering**, **suspicious pacing**, and **abnormal human behavior** using **YOLOv8** and advanced motion-analysis algorithms.  
+Built for smart campuses, malls, offices, parking areas, and public safety ecosystems.
 
 ---
 
-## **🧠 Technology Stack**
+## 📌 Key Features
 
-### **Frontend**
-
-* **React.js**
-* **Vite**
-* **TailwindCSS**
-* **Canvas API (Visualization Layer)**
-* **ONNX Runtime Web (YOLO inference)**
-* **TensorFlow.js (pose/head models)**
-* **Socket.IO Client**
-* **Recharts (analytics dashboards)**
-
-### **Backend**
-
-* **Node.js + Express**
-* **Socket.IO**
-* **PostgreSQL / SQLite**
-* **JWT Authentication**
-
-### **Computer Vision Models**
-
-* **YOLOv8n / YOLOv10n (object detection)**
-* **DeepSORT / ByteTrack (multi-object tracking)**
-* **MoveNet (behavior pose analysis)**
-* **MediaPipe FaceMesh (face covering & head turns)**
-* **FaceNet / InsightFace (suspect identification)**
-
-### **AI Chat System using OpenAI or Llama**
-
-### **Several Python Microservices**
+- 🔍 **Real-time person detection** using YOLOv8  
+- 🎯 **Behavior recognition:**  
+  - Loitering detection (🔴 red bounding box)  
+  - Suspicious pacing (🟡 yellow bounding box)  
+- ⚡ **Fast Flask-based video streaming** (low latency)  
+- 📊 **Real-time dashboard** with live detections  
+- 🧠 **Custom behavior algorithms** (time + movement analysis)  
+- 🎥 **Web-based UI** with clean design  
+- 🔧 **Lightweight & hardware-efficient**
 
 ---
 
-## **📌 Use Cases**
+## 🧠 How It Works (Architecture)
 
-* Corporate security operations
-* Campus safety & student monitoring
-* Airport & metro crowd analytics
-* Mall anti-theft systems
-* Industrial site safety
-* Smart city surveillance
+┌─────────────────────────┐
+│ Live Camera Feed │
+└─────────────┬───────────┘
+│
+▼
+┌─────────────────────────┐
+│ YOLOv8 Detector │
+│ (Person Class Only) │
+└─────────────┬───────────┘
+│
+▼
+┌──────────────────────────────┐
+│ Behavior Analysis Module │
+│ - Loitering Timer │
+│ - Pacing Movement Pattern │
+└─────────────┬────────────────┘
+│
+▼
+┌──────────────────────────────┐
+│ Colored Bounding Boxes │
+│ (Red = Loitering, Yellow = Pacing)
+└─────────────┬────────────────┘
+│
+▼
+┌──────────────────────────────┐
+│ Flask Live Stream Server │
+└─────────────┬────────────────┘
+│
+▼
+┌──────────────────────────────┐
+│ Web Dashboard (UI) │
+└──────────────────────────────┘
+
 
 ---
 
-## **📨 Alerts & Integrations**
+## 🛠️ Tech Stack
 
-* Loudspeaker / siren activation
-* Flashing red / white pulses
-* SMS / WhatsApp notification
+**Backend / AI**
+- Python  
+- Flask  
+- YOLOv8 (Ultralytics)  
+- OpenCV  
+- NumPy  
+
+**Frontend**
+- HTML  
+- CSS  
+- JavaScript  
 
 ---
 
-## **🏁 Final notes**
+## 📂 Project Structure
 
-This project serves as a complete proof-of-concept for modern AI-driven surveillance, combining real-time detection, behavioral analytics, and natural-language insights into one cohesive security system.
+Smart-Intrusion-Detection-Response-Agent/
+│
+├── app.py # Main Flask app
+├── detection/ # YOLO model & behavior logic
+├── static/ # CSS, JS, icons
+├── templates/ # HTML dashboard
+├── requirements.txt # Dependencies
+└── README.md # Project documentation
+
+
+---
+
+## ⚙️ Installation & Setup (Simple Version)
+
+
+```bash
+1️⃣ Clone the repository
+
+git clone https://github.com/ritiksharmacodes/Smart-Intrusion-Detection-Response-Agent.git
+cd Smart-Intrusion-Detection-Response-Agent
+
+
+2️⃣ Install dependencies
+pip install -r requirements.txt
+
+
+3️⃣ Run the application
+python app.py
+
+4️⃣ Open in browser
+http://127.0.0.1:5000
+
+```
+## **▶️ Usage**
+
+- Launch the Flask server
+
+- Open the live dashboard in your browser
+
+- The system will automatically detect people
+
+- Behavior detection is visualized as:
+
+  - Red Box → Loitering
+
+  - Yellow Box → Suspicious pacing
+
+- View logs & FPS for debugging
+
+## **🚀 Future Enhancements**
+
+- Restricted-area intrusion alerts
+
+- Multi-camera central dashboard
+
+- Audio/visual alert integration
+
+- Notification system (SMS/Email/WhatsApp)
+
+- Cloud deployment support
+
+## **🙌 Team Members**
+
+Ritik Sharma
+
+Navneet Singh Rawat
+
+
+## **⭐ If you like this project, consider giving it a star on GitHub!**
